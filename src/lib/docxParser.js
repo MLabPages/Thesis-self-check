@@ -1,0 +1,197 @@
+import JSZip from "jszip";
+
+const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+function parseXml(text) {
+  const xml = new DOMParser().parseFromString(text, "application/xml");
+  const error = xml.querySelector("parsererror");
+  if (error) throw new Error("Word文書のXMLを読み取れませんでした。");
+  return xml;
+}
+
+function descendants(node, localName) {
+  if (!node) return [];
+  return [...node.getElementsByTagNameNS(WORD_NS, localName)];
+}
+
+function first(node, localName) {
+  if (!node) return null;
+  return node.getElementsByTagNameNS(WORD_NS, localName)[0] ?? null;
+}
+
+function attr(node, name) {
+  return node?.getAttributeNS(WORD_NS, name) ?? node?.getAttribute(`w:${name}`) ?? "";
+}
+
+function nodeText(node) {
+  const chunks = [];
+  for (const child of node.getElementsByTagNameNS(WORD_NS, "*")) {
+    if (child.localName === "t") chunks.push(child.textContent ?? "");
+    if (child.localName === "tab") chunks.push("\t");
+    if (child.localName === "br" || child.localName === "cr") chunks.push("\n");
+  }
+  return chunks.join("").trim();
+}
+
+function buildStyleMap(stylesXml) {
+  if (!stylesXml) return new Map();
+  const xml = parseXml(stylesXml);
+  const styles = new Map();
+  for (const style of descendants(xml, "style")) {
+    const id = attr(style, "styleId");
+    const name = attr(first(style, "name"), "val");
+    if (id) styles.set(id, name || id);
+  }
+  return styles;
+}
+
+function paragraphInfo(node, index, styleMap) {
+  const styleId = attr(first(first(node, "pPr"), "pStyle"), "val");
+  const styleName = styleMap.get(styleId) || styleId || "";
+  const outlineValue = attr(first(first(node, "pPr"), "outlineLvl"), "val");
+  const outlineLevel = outlineValue === "" ? null : Number(outlineValue);
+  const isHeading =
+    /heading|見出し|タイトル/i.test(`${styleId} ${styleName}`) ||
+    (outlineLevel !== null &&
+      Number.isFinite(outlineLevel) &&
+      outlineLevel >= 0 &&
+      outlineLevel <= 8);
+  const levelMatch = `${styleId} ${styleName}`.match(/(?:heading|見出し)\s*([1-9])/i);
+
+  return {
+    id: `p${index + 1}`,
+    index: index + 1,
+    text: nodeText(node),
+    styleId,
+    styleName,
+    isHeading,
+    headingLevel: levelMatch
+      ? Number(levelMatch[1])
+      : isHeading
+        ? outlineLevel === null
+          ? 1
+          : outlineLevel + 1
+        : null,
+  };
+}
+
+function tableInfo(node, index) {
+  const rows = [...node.children]
+    .filter((child) => child.localName === "tr")
+    .map((row) =>
+      [...row.children]
+        .filter((child) => child.localName === "tc")
+        .map((cell) => nodeText(cell)),
+    );
+  return {
+    id: `table${index + 1}`,
+    index: index + 1,
+    rows,
+    text: rows.map((row) => row.join(" | ")).join("\n"),
+  };
+}
+
+function extractFootnotes(xmlText) {
+  if (!xmlText) return [];
+  const xml = parseXml(xmlText);
+  return descendants(xml, "footnote")
+    .filter((node) => {
+      const type = attr(node, "type");
+      return !type || type === "normal";
+    })
+    .map((node, index) => ({
+      id: attr(node, "id") || String(index + 1),
+      text: nodeText(node),
+    }))
+    .filter((item) => item.text);
+}
+
+function splitReferences(paragraphs) {
+  const start = paragraphs.findIndex((paragraph) =>
+    /^(参考文献|引用文献|文献一覧|references|bibliography)\s*$/i.test(paragraph.text),
+  );
+  if (start < 0) return { bodyParagraphs: paragraphs, references: [] };
+
+  return {
+    bodyParagraphs: paragraphs.slice(0, start),
+    references: paragraphs
+      .slice(start + 1)
+      .filter((paragraph) => paragraph.text)
+      .map((paragraph, index) => ({
+        id: `ref${index + 1}`,
+        paragraphId: paragraph.id,
+        text: paragraph.text,
+      })),
+  };
+}
+
+function createSections(paragraphs) {
+  const sections = [];
+  let current = { id: "section-0", heading: "本文", level: 0, paragraphs: [] };
+  sections.push(current);
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.isHeading && paragraph.text) {
+      current = {
+        id: `section-${sections.length}`,
+        heading: paragraph.text,
+        level: paragraph.headingLevel || 1,
+        paragraphs: [],
+      };
+      sections.push(current);
+    } else if (paragraph.text) {
+      current.paragraphs.push(paragraph);
+    }
+  }
+  return sections.filter((section) => section.heading !== "本文" || section.paragraphs.length);
+}
+
+export async function parseDocx(file) {
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const documentEntry = zip.file("word/document.xml");
+  if (!documentEntry) throw new Error("有効なWord文書ではありません。");
+
+  const [documentXml, stylesXml, footnotesXml] = await Promise.all([
+    documentEntry.async("text"),
+    zip.file("word/styles.xml")?.async("text"),
+    zip.file("word/footnotes.xml")?.async("text"),
+  ]);
+
+  const styleMap = buildStyleMap(stylesXml);
+  const xml = parseXml(documentXml);
+  const body = first(xml, "body");
+  if (!body) throw new Error("Word文書の本文を読み取れませんでした。");
+
+  const paragraphs = [];
+  const tables = [];
+  for (const child of body.children) {
+    if (child.localName === "p") {
+      paragraphs.push(paragraphInfo(child, paragraphs.length, styleMap));
+    }
+    if (child.localName === "tbl") {
+      tables.push(tableInfo(child, tables.length));
+    }
+  }
+
+  const { bodyParagraphs, references } = splitReferences(paragraphs);
+  const footnotes = extractFootnotes(footnotesXml);
+  const sections = createSections(bodyParagraphs);
+
+  return {
+    fileName: file.name,
+    paragraphs: bodyParagraphs,
+    sections,
+    headings: bodyParagraphs.filter((paragraph) => paragraph.isHeading && paragraph.text),
+    tables,
+    footnotes,
+    references,
+    stats: {
+      characters: bodyParagraphs.reduce((sum, paragraph) => sum + paragraph.text.length, 0),
+      paragraphs: bodyParagraphs.filter((paragraph) => paragraph.text).length,
+      headings: bodyParagraphs.filter((paragraph) => paragraph.isHeading && paragraph.text).length,
+      tables: tables.length,
+      footnotes: footnotes.length,
+      references: references.length,
+    },
+  };
+}

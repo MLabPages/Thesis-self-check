@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.npm-cache/
+.env
+.env.local
+.vite.*.log
+qa/
+design-qa.md
+verify.mjs
+make-comparison.py
+generate_test_docx.py
