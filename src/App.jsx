@@ -248,16 +248,27 @@ function ResultsScreen({ documentData, findings, onBack }) {
                     <Info size={16} />
                     {finding.reason}
                   </p>
-                  {finding.bibliography?.bestMatch?.url && (
-                    <a
-                      className="bibliography-link"
-                      href={finding.bibliography.bestMatch.url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Crossrefで原典候補を開く
-                      <ArrowRight size={15} />
-                    </a>
+                  {finding.bibliography?.links && (
+                    <div className="bibliography-links">
+                      {finding.bibliography.links.source && (
+                        <a href={finding.bibliography.links.source} target="_blank" rel="noreferrer">
+                          原典候補
+                          <ArrowRight size={15} />
+                        </a>
+                      )}
+                      {finding.bibliography.links.cinii && (
+                        <a href={finding.bibliography.links.cinii} target="_blank" rel="noreferrer">
+                          CiNii Research
+                          <ArrowRight size={15} />
+                        </a>
+                      )}
+                      {finding.bibliography.links.scholar && (
+                        <a href={finding.bibliography.links.scholar} target="_blank" rel="noreferrer">
+                          Google Scholarで手動確認
+                          <ArrowRight size={15} />
+                        </a>
+                      )}
+                    </div>
                   )}
                 </article>
               ))

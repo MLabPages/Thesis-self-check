@@ -1,46 +1,27 @@
+function differenceText(differences) {
+  return differences
+    .map(
+      (difference) =>
+        `${difference.field}\n記載：${difference.provided || "なし"}\n照合先：${difference.database || "なし"}`,
+    )
+    .join("\n\n");
+}
+
 function bibliographyFinding(reference, result) {
   const location = `参考文献 ${reference.id.replace("ref", "")}`;
 
-  if (result.status === "verified") {
-    const match = result.bestMatch;
-    return {
-      id: crypto.randomUUID(),
-      category: "引用・参考文献",
-      severity: "info",
-      location,
-      title: "書誌情報と一致する文献が見つかりました",
-      original: reference.text,
-      suggestion: [
-        `題名：${match.title || "不明"}`,
-        `著者：${match.authors || "不明"}`,
-        `掲載誌：${match.journal || "不明"}`,
-        `発行年：${match.year || "不明"}`,
-        `DOI：${match.doi || "なし"}`,
-      ].join("\n"),
-      reason:
-        "Crossrefの書誌情報と高い一致が確認されました。最終的にはリンク先の原典も確認してください。",
-      bibliography: result,
-    };
-  }
+  if (result.status === "verified") return null;
 
-  if (result.status === "possible") {
-    const match = result.bestMatch;
+  if (result.status === "mismatch") {
     return {
       id: crypto.randomUUID(),
       category: "引用・参考文献",
       severity: "warning",
       location,
-      title: "類似する文献が見つかりました",
+      title: "書誌情報に差異があります",
       original: reference.text,
-      suggestion: [
-        `候補題名：${match.title || "不明"}`,
-        `候補著者：${match.authors || "不明"}`,
-        `掲載誌：${match.journal || "不明"}`,
-        `発行年：${match.year || "不明"}`,
-        `DOI：${match.doi || "なし"}`,
-      ].join("\n"),
-      reason:
-        "一部の書誌情報だけが一致しています。著者名、年、題名、掲載誌を原典と照合してください。",
+      suggestion: differenceText(result.differences),
+      reason: `${result.bestMatch.provider}の候補と照合しました。記載順は判定せず、値が異なる項目だけを表示しています。`,
       bibliography: result,
     };
   }
@@ -48,14 +29,14 @@ function bibliographyFinding(reference, result) {
   return {
     id: crypto.randomUUID(),
     category: "引用・参考文献",
-    severity: "important",
+    severity: "info",
     location,
-    title: "Crossrefでは一致する文献を確認できませんでした",
+    title: "一致する文献を確認できませんでした",
     original: reference.text,
     suggestion:
-      "表記の誤りがないか確認し、日本語文献はCiNii Researchや国立国会図書館サーチでも検索してください。",
+      "表記の誤りがないか確認し、CiNii ResearchまたはGoogle Scholarの検索結果を手動で確認してください。",
     reason:
-      "見つからないことは架空文献を意味しません。Crossref未収録の紀要、書籍、日本語文献などがあります。",
+      "CrossrefとCiNii Researchで照合しました。見つからないことは架空文献を意味しません。",
     bibliography: result,
   };
 }
@@ -65,7 +46,10 @@ export async function verifyBibliography(references) {
   const apiAvailable =
     !import.meta.env.DEV || import.meta.env.VITE_BIBLIOGRAPHY_API_ENABLED === "true";
 
-  for (const reference of references) {
+  for (const [index, reference] of references.entries()) {
+    if (index > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+    }
     if (!apiAvailable) {
       findings.push({
         id: crypto.randomUUID(),
@@ -74,8 +58,9 @@ export async function verifyBibliography(references) {
         location: `参考文献 ${reference.id.replace("ref", "")}`,
         title: "書誌照合は公開環境で実行されます",
         original: reference.text,
-        suggestion: "Vercel公開版ではCrossrefの照合結果と原典候補を表示します。",
-        reason: "通常のローカル開発サーバーには書誌照合APIがないため、外部通信を行っていません。",
+        suggestion:
+          "Vercel公開版ではCrossrefとCiNii Researchで照合し、差異がある項目だけを表示します。",
+        reason: "通常のローカル開発サーバーには書誌照合APIがありません。",
       });
       continue;
     }
@@ -87,7 +72,8 @@ export async function verifyBibliography(references) {
       });
       if (!response.ok) throw new Error("lookup unavailable");
       const result = await response.json();
-      findings.push(bibliographyFinding(reference, result));
+      const finding = bibliographyFinding(reference, result);
+      if (finding) findings.push(finding);
     } catch {
       findings.push({
         id: crypto.randomUUID(),
@@ -96,7 +82,7 @@ export async function verifyBibliography(references) {
         location: `参考文献 ${reference.id.replace("ref", "")}`,
         title: "書誌データベースへ接続できませんでした",
         original: reference.text,
-        suggestion: "公開環境で再実行するか、Crossref・CiNii Researchで手動確認してください。",
+        suggestion: "公開環境で再実行するか、CiNii Researchで手動確認してください。",
         reason: "基本チェックは完了していますが、外部書誌照合APIを利用できませんでした。",
       });
     }

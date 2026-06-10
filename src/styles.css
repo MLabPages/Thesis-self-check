@@ -433,9 +433,14 @@ footer {
   font-size: 11px;
   line-height: 1.6;
 }
-.bibliography-link {
-  width: fit-content;
+.bibliography-links {
   margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 15px;
+}
+.bibliography-links a {
+  width: fit-content;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -444,7 +449,7 @@ footer {
   font-weight: 700;
   text-decoration: none;
 }
-.bibliography-link:hover { text-decoration: underline; }
+.bibliography-links a:hover { text-decoration: underline; }
 .empty-findings {
   min-height: 230px;
   display: flex;
