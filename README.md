@@ -30,6 +30,7 @@ OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4o-mini
 VITE_AI_REVIEW_ENABLED=true
 CROSSREF_MAILTO=管理者のメールアドレス
+CINII_APP_ID=CiNiiのAPI利用登録で取得したID
 ```
 
 APIキーはフロントエンドやGitHubへ記載しないでください。`/api/review` は
@@ -47,6 +48,13 @@ AIを利用する場合は、VercelのEnvironment Variablesへ上記3変数を�
 
 GitHub Pagesは静的サイトのみのため、`api/`のAI・書誌照合機能は動作しません。
 
-Vercel公開版では、参考文献をCrossrefへ照会し、題名・著者・掲載誌・発行年・
-DOIと原典候補へのリンクを結果画面に表示します。Crossrefで見つからない場合は、
-架空文献とは断定せず、CiNii Researchなどでの再確認を促します。
+Vercel公開版では、参考文献をCrossrefとCiNii Researchへ照会します。一致した
+文献は結果件数を増やさず、題名・著者・掲載誌・発行年・DOIに差異がある場合だけ、
+入力値とデータベース値を表示します。記載順は判定しません。
+
+Google Scholarには公式の検索APIがないため、自動取得やスクレイピングは行わず、
+確認が必要な文献に手動検索リンクを表示します。
+
+CiNii Research APIは利用登録が必要です。登録後に発行されたIDをVercelの
+`CINII_APP_ID`へ設定してください。未設定の場合はアクセス制限を受けやすく、
+日本語文献の照合が不安定になることがあります。

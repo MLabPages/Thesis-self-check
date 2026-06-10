@@ -38,6 +38,14 @@ function textForLengthCheck(sentence) {
 
 function isStructurallyLong(sentence) {
   const effectiveText = textForLengthCheck(sentence);
+  const statisticalPattern =
+    /尺度|適合度|信頼性係数|妥当性|因子負荷|相関係数|回帰係数|平均値|標準偏差|RMSEA|CFI|TLI|SRMR|AIC|BIC|Cronbach|χ[²2]?|カイ二乗|p\s*[<=>]|[trF]\s*\([^)]*\)\s*=|β\s*=|α\s*=/i;
+  const numericExpressions =
+    effectiveText.match(/(?:\d+(?:\.\d+)?%?|[αβχ²]|p|RMSEA|CFI|TLI|SRMR)\s*[=<>]?\s*-?\d*(?:\.\d+)?/gi) ??
+    [];
+  if (statisticalPattern.test(effectiveText) && numericExpressions.length >= 3) {
+    return false;
+  }
   const punctuationCount = (effectiveText.match(/[、，,；;]/g) ?? []).length;
   const connectiveCount = (
     effectiveText.match(/ため|ので|しかし|一方|また|さらに|および|ならびに|ことから|ことにより/g) ?? []
@@ -100,7 +108,7 @@ function checkWriting(document) {
           suggestion:
             "引用表記や直接引用は保ったまま、主張・根拠・補足を分けられるか確認してください。",
           reason:
-            "引用部分と（筆者，年）の表記を除いた長さに加え、読点や接続表現が多い文だけを抽出しています。長いこと自体が誤りではありません。",
+            "引用部分と（筆者，年）の表記を除いた長さに加え、読点や接続表現が多い文だけを抽出しています。尺度説明や適合度指標など、数値・統計記号を伴う報告文は原則として除外します。長いこと自体が誤りではありません。",
         }),
       );
     }
