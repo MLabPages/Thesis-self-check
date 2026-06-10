@@ -29,6 +29,7 @@ Vercelなどのサーバー環境で次を設定します。
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4o-mini
 VITE_AI_REVIEW_ENABLED=true
+CROSSREF_MAILTO=管理者のメールアドレス
 ```
 
 APIキーはフロントエンドやGitHubへ記載しないでください。`/api/review` は
@@ -45,3 +46,7 @@ Vercelへこのリポジトリをインポートします。ビルド設定はVi
 AIを利用する場合は、VercelのEnvironment Variablesへ上記3変数を設定します。
 
 GitHub Pagesは静的サイトのみのため、`api/`のAI・書誌照合機能は動作しません。
+
+Vercel公開版では、参考文献をCrossrefへ照会し、題名・著者・掲載誌・発行年・
+DOIと原典候補へのリンクを結果画面に表示します。Crossrefで見つからない場合は、
+架空文献とは断定せず、CiNii Researchなどでの再確認を促します。

@@ -1,4 +1,4 @@
-import { findSensitiveText } from "./privacy";
+import { findSensitiveText } from "./privacy.js";
 
 function result({ category, severity = "warning", location, title, original, suggestion, reason }) {
   return {
@@ -15,6 +15,39 @@ function result({ category, severity = "warning", location, title, original, sug
 
 function paragraphLocation(paragraph) {
   return `本文 ${paragraph.index}段落`;
+}
+
+function splitSentences(text) {
+  if (typeof Intl !== "undefined" && Intl.Segmenter) {
+    const segmenter = new Intl.Segmenter("ja", { granularity: "sentence" });
+    return [...segmenter.segment(text)]
+      .map(({ segment }) => segment.trim())
+      .filter(Boolean);
+  }
+  return text.match(/[^。！？!?]+[。！？!?]?/g)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [];
+}
+
+function textForLengthCheck(sentence) {
+  return sentence
+    .replace(/「[^」]*」/g, "")
+    .replace(/『[^』]*』/g, "")
+    .replace(/（[^）]*(?:19|20)\d{2}[^）]*）/g, "")
+    .replace(/\([^)]*(?:19|20)\d{2}[^)]*\)/g, "")
+    .replace(/\s+/g, "");
+}
+
+function isStructurallyLong(sentence) {
+  const effectiveText = textForLengthCheck(sentence);
+  const punctuationCount = (effectiveText.match(/[、，,；;]/g) ?? []).length;
+  const connectiveCount = (
+    effectiveText.match(/ため|ので|しかし|一方|また|さらに|および|ならびに|ことから|ことにより/g) ?? []
+  ).length;
+
+  return (
+    effectiveText.length >= 180 ||
+    (effectiveText.length >= 145 && punctuationCount >= 4) ||
+    (effectiveText.length >= 135 && punctuationCount >= 3 && connectiveCount >= 2)
+  );
 }
 
 function checkWriting(document) {
@@ -56,16 +89,18 @@ function checkWriting(document) {
         );
       }
     }
-    const sentences = paragraph.text.split(/[。！？]/).filter(Boolean);
-    if (sentences.some((sentence) => sentence.length >= 120)) {
+    const longSentences = splitSentences(paragraph.text).filter(isStructurallyLong);
+    for (const sentence of longSentences) {
       findings.push(
         result({
           category: "誤字脱字・文章表現",
           location: paragraphLocation(paragraph),
-          title: "一文が長すぎる可能性",
-          original: paragraph.text,
-          suggestion: "主語と述語の対応を確認し、複数の文に分けることを検討してください。",
-          reason: "長い文は論理関係が読み取りにくくなることがあります。",
+          title: "一文の構造が複雑な可能性",
+          original: sentence,
+          suggestion:
+            "引用表記や直接引用は保ったまま、主張・根拠・補足を分けられるか確認してください。",
+          reason:
+            "引用部分と（筆者，年）の表記を除いた長さに加え、読点や接続表現が多い文だけを抽出しています。長いこと自体が誤りではありません。",
         }),
       );
     }
@@ -160,7 +195,6 @@ function checkCitations(document) {
 
   for (const reference of document.references) {
     const hasYear = /(?:19|20)\d{2}|n\.d\./i.test(reference.text);
-    const hasLocator = /doi\.org|10\.\d{4,9}\/[-._;()/:A-Z0-9]+|https?:\/\//i.test(reference.text);
     if (!hasYear) {
       findings.push(
         result({
@@ -170,19 +204,6 @@ function checkCitations(document) {
           original: reference.text,
           suggestion: "発行年、不明の場合は指定形式の「n.d.」が必要か確認してください。",
           reason: "文献の特定と引用形式の統一に必要です。",
-        }),
-      );
-    }
-    if (!hasLocator) {
-      findings.push(
-        result({
-          category: "引用・参考文献",
-          severity: "info",
-          location: `参考文献 ${reference.id.replace("ref", "")}`,
-          title: "文献の実在性を外部照合する候補",
-          original: reference.text,
-          suggestion: "論文名・著者・掲載誌をCrossrefまたはCiNii Researchで照合します。",
-          reason: "DOIやURLがない文献は、題名などを使った書誌検索が必要です。",
         }),
       );
     }
