@@ -1,4 +1,4 @@
-import { prepareAiPayload } from "./privacy";
+import { prepareAiPayload } from "./privacy.js";
 
 export async function requestAiReview(document, selectedChecks, signal) {
   const response = await fetch("/api/review", {

@@ -29,6 +29,7 @@ import {
 import { parseDocx } from "./lib/docxParser";
 import { runLocalChecks } from "./lib/localChecks";
 import { requestAiReview } from "./lib/aiClient";
+import { verifyBibliography } from "./lib/bibliographyClient";
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 
@@ -247,6 +248,17 @@ function ResultsScreen({ documentData, findings, onBack }) {
                     <Info size={16} />
                     {finding.reason}
                   </p>
+                  {finding.bibliography?.bestMatch?.url && (
+                    <a
+                      className="bibliography-link"
+                      href={finding.bibliography.bestMatch.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Crossrefで原典候補を開く
+                      <ArrowRight size={15} />
+                    </a>
+                  )}
                 </article>
               ))
             )}
@@ -360,7 +372,11 @@ export function App() {
     await new Promise((resolve) => window.setTimeout(resolve, 250));
     setProgress(60);
     const localFindings = runLocalChecks(documentData, selected);
-    let combinedFindings = localFindings;
+    let combinedFindings = [...localFindings];
+    if (selected.includes("citations") && documentData.references.length > 0) {
+      const bibliographyFindings = await verifyBibliography(documentData.references);
+      combinedFindings.push(...bibliographyFindings);
+    }
     if (useAi && aiEnabled) {
       try {
         const aiResult = await requestAiReview(documentData, selected);
