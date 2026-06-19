@@ -39,11 +39,22 @@ function textForLengthCheck(sentence) {
 function isStructurallyLong(sentence) {
   const effectiveText = textForLengthCheck(sentence);
   const statisticalPattern =
-    /尺度|適合度|信頼性係数|妥当性|因子負荷|相関係数|回帰係数|平均値|標準偏差|RMSEA|CFI|TLI|SRMR|AIC|BIC|Cronbach|χ[²2]?|カイ二乗|p\s*[<=>]|[trF]\s*\([^)]*\)\s*=|β\s*=|α\s*=/i;
+    /尺度|適合度|信頼性係数|妥当性|因子負荷|相関係数|回帰係数|平均値|標準偏差|媒介分析|間接効果|信頼区間|RMSEA|CFI|TLI|SRMR|AIC|BIC|Cronbach|χ[²2]?|カイ二乗|CI|p\s*[<=>]|[bβrtrF]\s*(?:\([^)]*\))?\s*=|α\s*=/i;
+  const scaleDescriptionPattern =
+    /調査に用いる変数|用いる変数|採用した|尺度|下位尺度|構成概念|因子モデル|ブランド経験|ブランド態度|ロイヤルティ|適合度/i;
   const numericExpressions =
-    effectiveText.match(/(?:\d+(?:\.\d+)?%?|[αβχ²]|p|RMSEA|CFI|TLI|SRMR)\s*[=<>]?\s*-?\d*(?:\.\d+)?/gi) ??
+    effectiveText.match(/(?:\d+(?:\.\d+)?%?|[αβχ²]|b|r|p|CI|RMSEA|CFI|TLI|SRMR)\s*[=<>]?\s*-?\d*(?:\.\d+)?/gi) ??
     [];
   if (statisticalPattern.test(effectiveText) && numericExpressions.length >= 3) {
+    return false;
+  }
+  const parentheticalTermCount = (sentence.match(/[（(][A-Za-z][^）)]{1,40}[）)]/g) ?? [])
+    .length;
+  const citationCount = (sentence.match(/(?:19|20)\d{2}/g) ?? []).length;
+  if (
+    scaleDescriptionPattern.test(sentence) &&
+    (parentheticalTermCount >= 2 || citationCount >= 2 || numericExpressions.length >= 2)
+  ) {
     return false;
   }
   const punctuationCount = (effectiveText.match(/[、，,；;]/g) ?? []).length;

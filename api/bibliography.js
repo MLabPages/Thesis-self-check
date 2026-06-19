@@ -32,23 +32,79 @@ function crossrefYear(item, key) {
   return item[key]?.["date-parts"]?.[0]?.[0] ?? null;
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function queryVariants(value) {
+  const source = String(value ?? "").trim();
+  if (!source) return [];
+  const withoutParentheses = source.replace(/[（(][^）)]{2,}[）)]/g, " ").trim();
+  const beforeSubtitle = source.split(/[：:－\-―–]/)[0]?.trim();
+  const japaneseOnly =
+    source.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー々]+/gu)?.join(" ") ??
+    "";
+  return compact([
+    source,
+    withoutParentheses,
+    beforeSubtitle,
+    japaneseOnly.length >= 6 ? japaneseOnly : null,
+  ]).filter((query) => query.length >= 4);
+}
+
+function hasJapanese(value) {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(
+    String(value ?? ""),
+  );
+}
+
+function authorSimilarity(referenceAuthors, candidateAuthors) {
+  const reference = normalize(referenceAuthors);
+  const candidate = normalize(candidateAuthors);
+  if (!reference || !candidate) return 0;
+  if (reference.includes(candidate.slice(0, 4))) return 1;
+  const candidateParts = String(candidateAuthors)
+    .split(/[,，、;&]|\band\b|・/i)
+    .map((part) => normalize(part))
+    .filter((part) => part.length >= 2);
+  if (candidateParts.some((part) => reference.includes(part) || part.includes(reference))) {
+    return 1;
+  }
+  const partScore = candidateParts.length
+    ? Math.max(...candidateParts.map((part) => similarity(reference, part)))
+    : 0;
+  return Math.max(similarity(referenceAuthors, candidateAuthors), partScore);
+}
+
 function extractReferenceFields(reference) {
   const year = reference.match(/(?:19|20)\d{2}/)?.[0] ?? null;
   const doi =
     reference
       .match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i)?.[0]
       ?.replace(/[.,;)\]]+$/, "") ?? null;
-  const title =
+  const japaneseTitle =
     reference.match(/「([^」]{3,})」/)?.[1] ??
     reference.match(/『([^』]{3,})』/)?.[1] ??
     reference.match(/[“"]([^”"]{5,})[”"]/)?.[1] ??
     null;
-  const journal = reference.match(/『([^』]{2,})』/)?.[1] ?? null;
+  const afterYear = year
+    ? reference
+        .slice(reference.search(new RegExp(`\\(?${year}\\)?`)))
+        .replace(new RegExp(`^\\(?${year}\\)?[).．。\\s]*`), "")
+        .replace(/https?:\/\/\S+/g, "")
+        .trim()
+    : "";
+  const englishParts = afterYear
+    .split(/\.\s+/)
+    .map((part) => part.trim().replace(/[.。]+$/, ""))
+    .filter((part) => part.length >= 5);
+  const title = japaneseTitle ?? englishParts[0] ?? null;
+  const journal = reference.match(/『([^』]{2,})』/)?.[1] ?? englishParts[1] ?? null;
   const authorArea = reference.split(/(?:19|20)\d{2}/)[0] ?? "";
   return { year, doi, title, journal, authorArea };
 }
 
-function matchConfidence(reference, fields, match) {
+function scoreMatch(reference, fields, match) {
   const titleScore = fields.title
     ? similarity(fields.title, match.title)
     : similarity(reference, match.title);
@@ -60,20 +116,39 @@ function matchConfidence(reference, fields, match) {
       ? 1
       : 0
     : 0.5;
-  const authorScore =
-    match.authors &&
-    normalize(fields.authorArea).includes(normalize(match.authors).slice(0, 4))
-      ? 1
-      : similarity(fields.authorArea, match.authors);
+  const authorScore = authorSimilarity(fields.authorArea, match.authors);
   const doiScore = fields.doi
     ? normalize(fields.doi) === normalize(match.doi)
       ? 1
       : 0
     : 0.5;
-  return Math.round(
+  const confidence = Math.round(
     (titleScore * 0.5 + yearScore * 0.25 + authorScore * 0.15 + doiScore * 0.1) *
       100,
   ) / 100;
+  return { titleScore, yearScore, authorScore, doiScore, confidence };
+}
+
+function matchConfidence(reference, fields, match) {
+  const { confidence } = scoreMatch(reference, fields, match);
+  return confidence;
+}
+
+function isReliableMatch(reference, fields, match) {
+  const scores = scoreMatch(reference, fields, match);
+  if (fields.doi) {
+    return normalize(fields.doi) === normalize(match.doi);
+  }
+  if (!fields.title || scores.titleScore < 0.82) return false;
+  if (fields.authorArea && match.authors && scores.authorScore < 0.48) {
+    return false;
+  }
+  if (fields.year && (match.yearCandidates?.length || match.year) && scores.yearScore === 0) {
+    return false;
+  }
+  return Math.round(
+    scores.confidence * 100,
+  ) / 100 >= 0.58;
 }
 
 function compareFields(fields, match) {
@@ -92,7 +167,7 @@ function compareFields(fields, match) {
   }
   if (fields.authorArea && match.authors) {
     checkedFields.push("著者");
-    if (similarity(fields.authorArea, match.authors) < 0.42) {
+    if (authorSimilarity(fields.authorArea, match.authors) < 0.48) {
       differences.push({
         field: "著者",
         provided: fields.authorArea.trim(),
@@ -176,13 +251,20 @@ function ciniiMatch(item, reference, fields) {
       "@value"
     ] ?? null;
   const publicationDate = item["prism:publicationDate"] ?? "";
+  const creators = Array.isArray(item["dc:creator"])
+    ? item["dc:creator"]
+    : item["dc:creator"]
+      ? [item["dc:creator"]]
+      : [];
+  const orderedCreators = [
+    ...creators.filter(hasJapanese),
+    ...creators.filter((creator) => !hasJapanese(creator)),
+  ];
   const match = {
     provider: "CiNii Research",
     doi,
     title: item.title ?? "",
-    authors: Array.isArray(item["dc:creator"])
-      ? item["dc:creator"].join(", ")
-      : item["dc:creator"] ?? "",
+    authors: orderedCreators.join(", "),
     journal: item["prism:publicationName"] ?? "",
     year: String(publicationDate).match(/(?:19|20)\d{2}/)?.[0] ?? null,
     url: item.link?.["@id"] ?? item["@id"] ?? null,
@@ -205,42 +287,52 @@ async function searchCrossref(reference, fields, headers) {
     }
   }
 
-  const url = new URL("https://api.crossref.org/works");
-  url.searchParams.set("query.bibliographic", fields.title || reference);
-  url.searchParams.set("rows", "5");
-  url.searchParams.set(
-    "select",
-    "DOI,title,author,published,published-print,published-online,issued,created,container-title,URL",
-  );
-  if (process.env.CROSSREF_MAILTO) {
-    url.searchParams.set("mailto", process.env.CROSSREF_MAILTO);
+  const matches = [];
+  for (const query of queryVariants(fields.title || reference).slice(0, 3)) {
+    const url = new URL("https://api.crossref.org/works");
+    url.searchParams.set("query.bibliographic", query);
+    url.searchParams.set("rows", "5");
+    url.searchParams.set(
+      "select",
+      "DOI,title,author,published,published-print,published-online,issued,created,container-title,URL",
+    );
+    if (process.env.CROSSREF_MAILTO) {
+      url.searchParams.set("mailto", process.env.CROSSREF_MAILTO);
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) continue;
+    const data = await response.json();
+    matches.push(
+      ...(data.message?.items ?? []).map((item) =>
+        crossrefMatch(item, reference, fields),
+      ),
+    );
   }
-  const response = await fetch(url, { headers });
-  if (!response.ok) return [];
-  const data = await response.json();
-  return (data.message?.items ?? []).map((item) =>
-    crossrefMatch(item, reference, fields),
-  );
+  return matches;
 }
 
 async function searchCinii(reference, fields) {
-  const url = new URL("https://cir.nii.ac.jp/opensearch/articles");
-  const titleQuery =
-    fields.title && fields.title.length > 10
-      ? fields.title.slice(0, Math.ceil(fields.title.length * 0.65))
-      : fields.title;
-  url.searchParams.set("q", titleQuery || reference);
-  url.searchParams.set("count", "5");
-  url.searchParams.set("start", "1");
-  url.searchParams.set("lang", "ja");
-  url.searchParams.set("format", "json");
-  if (process.env.CINII_APP_ID) {
-    url.searchParams.set("appid", process.env.CINII_APP_ID);
+  const matches = [];
+  const queries = queryVariants(fields.title || reference).slice(0, 3);
+  for (const [index, query] of queries.entries()) {
+    if (index > 0) await wait(650);
+    const url = new URL("https://cir.nii.ac.jp/opensearch/articles");
+    url.searchParams.set("q", query);
+    url.searchParams.set("count", "5");
+    url.searchParams.set("start", "1");
+    url.searchParams.set("lang", "ja");
+    url.searchParams.set("format", "json");
+    if (process.env.CINII_APP_ID) {
+      url.searchParams.set("appid", process.env.CINII_APP_ID);
+    }
+    const response = await fetch(url);
+    if (!response.ok) continue;
+    const data = await response.json();
+    const batch = (data.items ?? []).map((item) => ciniiMatch(item, reference, fields));
+    matches.push(...batch);
+    if (batch.some((match) => isReliableMatch(reference, fields, match))) break;
   }
-  const response = await fetch(url);
-  if (!response.ok) return [];
-  const data = await response.json();
-  return (data.items ?? []).map((item) => ciniiMatch(item, reference, fields));
+  return matches;
 }
 
 export default async function handler(request, response) {
@@ -267,7 +359,7 @@ export default async function handler(request, response) {
   const matches = results
     .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
     .sort((left, right) => right.confidence - left.confidence);
-  const bestMatch = matches[0] ?? null;
+  const bestMatch = matches.find((match) => isReliableMatch(reference, fields, match)) ?? null;
 
   if (!bestMatch || bestMatch.confidence < 0.43) {
     return response.status(200).json({

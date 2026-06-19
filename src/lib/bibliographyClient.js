@@ -31,12 +31,12 @@ function bibliographyFinding(reference, result) {
     category: "引用・参考文献",
     severity: "info",
     location,
-    title: "一致する文献を確認できませんでした",
+    title: "自動照合で一致候補を確定できませんでした",
     original: reference.text,
     suggestion:
-      "表記の誤りがないか確認し、CiNii ResearchまたはGoogle Scholarの検索結果を手動で確認してください。",
+      "表記の誤りがないか確認し、CiNii ResearchまたはGoogle Scholarの検索結果を手動で確認してください。検索語を短くすると見つかる場合があります。",
     reason:
-      "CrossrefとCiNii Researchで照合しました。見つからないことは架空文献を意味しません。",
+      "CrossrefとCiNii Researchの候補からは十分に確実な一致を選べませんでした。文献が存在しないという判定ではありません。",
     bibliography: result,
   };
 }
