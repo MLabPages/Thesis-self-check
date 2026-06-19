@@ -43,8 +43,12 @@ function bibliographyFinding(reference, result) {
 
 export async function verifyBibliography(references) {
   const findings = [];
+  const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(
+    window.location.hostname,
+  );
   const apiAvailable =
-    !import.meta.env.DEV || import.meta.env.VITE_BIBLIOGRAPHY_API_ENABLED === "true";
+    import.meta.env.VITE_BIBLIOGRAPHY_API_ENABLED === "true" ||
+    (!import.meta.env.DEV && !isLocalHost);
 
   for (const [index, reference] of references.entries()) {
     if (index > 0) {

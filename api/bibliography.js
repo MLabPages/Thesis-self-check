@@ -24,6 +24,14 @@ function similarity(left, right) {
   return (2 * overlap) / (leftSet.size + rightSet.size);
 }
 
+function compact(values) {
+  return [...new Set(values.filter(Boolean).map(String))];
+}
+
+function crossrefYear(item, key) {
+  return item[key]?.["date-parts"]?.[0]?.[0] ?? null;
+}
+
 function extractReferenceFields(reference) {
   const year = reference.match(/(?:19|20)\d{2}/)?.[0] ?? null;
   const doi =
@@ -44,8 +52,11 @@ function matchConfidence(reference, fields, match) {
   const titleScore = fields.title
     ? similarity(fields.title, match.title)
     : similarity(reference, match.title);
-  const yearScore = fields.year && match.year
-    ? String(fields.year) === String(match.year)
+  const yearCandidates = match.yearCandidates?.length
+    ? match.yearCandidates
+    : compact([match.year]);
+  const yearScore = fields.year && yearCandidates.length
+    ? yearCandidates.includes(String(fields.year))
       ? 1
       : 0
     : 0.5;
@@ -89,13 +100,16 @@ function compareFields(fields, match) {
       });
     }
   }
-  if (fields.year && match.year) {
+  const yearCandidates = match.yearCandidates?.length
+    ? match.yearCandidates
+    : compact([match.year]);
+  if (fields.year && yearCandidates.length) {
     checkedFields.push("発行年");
-    if (String(fields.year) !== String(match.year)) {
+    if (!yearCandidates.includes(String(fields.year))) {
       differences.push({
         field: "発行年",
         provided: String(fields.year),
-        database: String(match.year),
+        database: yearCandidates.join(" / "),
       });
     }
   }
@@ -123,6 +137,13 @@ function compareFields(fields, match) {
 }
 
 function crossrefMatch(item, reference, fields, confidenceOverride = null) {
+  const yearCandidates = compact([
+    crossrefYear(item, "published-print"),
+    crossrefYear(item, "published"),
+    crossrefYear(item, "issued"),
+    crossrefYear(item, "published-online"),
+    crossrefYear(item, "created"),
+  ]);
   const match = {
     provider: "Crossref",
     doi: item.DOI ?? null,
@@ -131,7 +152,8 @@ function crossrefMatch(item, reference, fields, confidenceOverride = null) {
       .map((author) => [author.family, author.given].filter(Boolean).join(" "))
       .join(", "),
     journal: item["container-title"]?.[0] ?? "",
-    year: item.published?.["date-parts"]?.[0]?.[0] ?? null,
+    year: yearCandidates[0] ?? null,
+    yearCandidates,
     url: item.URL ?? null,
   };
   return {
@@ -186,7 +208,10 @@ async function searchCrossref(reference, fields, headers) {
   const url = new URL("https://api.crossref.org/works");
   url.searchParams.set("query.bibliographic", fields.title || reference);
   url.searchParams.set("rows", "5");
-  url.searchParams.set("select", "DOI,title,author,published,container-title,URL");
+  url.searchParams.set(
+    "select",
+    "DOI,title,author,published,published-print,published-online,issued,created,container-title,URL",
+  );
   if (process.env.CROSSREF_MAILTO) {
     url.searchParams.set("mailto", process.env.CROSSREF_MAILTO);
   }
