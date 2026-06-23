@@ -140,6 +140,45 @@ function SiteHeader() {
   );
 }
 
+function ResultGuidance({ findings }) {
+  const important = findings.filter((finding) => finding.severity === "important").length;
+  const warnings = findings.filter((finding) => finding.severity === "warning").length;
+  const infos = findings.filter((finding) => finding.severity === "info").length;
+  const actionable = findings.filter((finding) => finding.severity !== "info");
+  const categoryCounts = actionable.reduce((counts, finding) => {
+    counts[finding.category] = (counts[finding.category] ?? 0) + 1;
+    return counts;
+  }, {});
+  const priorityCategories = Object.entries(categoryCounts)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([category]) => category);
+
+  return (
+    <section className="result-guidance">
+      <div>
+        <span className="guidance-icon">
+          <Check size={22} weight="bold" />
+        </span>
+      </div>
+      <div>
+        <h3>{findings.length === 0 ? "かなり整っています" : "一度に全部直さなくて大丈夫です"}</h3>
+        <p>
+          {findings.length === 0
+            ? "この自動チェックでは大きな確認事項は出ていません。最後に本文と参考文献を自分の目で読み直してください。"
+            : `まずは優先確認 ${important}件、次に修正候補 ${warnings}件を見ます。補足情報 ${infos}件は、余裕があるときに確認してください。`}
+        </p>
+        {priorityCategories.length > 0 && (
+          <p className="guidance-next">
+            先に見るとよい順番：
+            <strong>{priorityCategories.join(" → ")}</strong>
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ResultsScreen({ documentData, findings, onBack }) {
   const [filter, setFilter] = useState("すべて");
   const categories = ["すべて", ...new Set(findings.map((finding) => finding.category))];
@@ -196,6 +235,8 @@ function ResultsScreen({ documentData, findings, onBack }) {
           ))}
         </section>
 
+        <ResultGuidance findings={findings} />
+
         <div className="results-layout">
           <aside className="filter-panel">
             <div className="filter-title">
@@ -248,12 +289,12 @@ function ResultsScreen({ documentData, findings, onBack }) {
                   <h4>{finding.title}</h4>
                   <div className="comparison">
                     <div>
-                      <span>検出内容</span>
+                      <span>確認した箇所</span>
                       <p>{finding.original}</p>
                     </div>
                     <ArrowRight size={20} />
                     <div>
-                      <span>修正・確認案</span>
+                      <span>次にやること</span>
                       <p>{finding.suggestion}</p>
                     </div>
                   </div>

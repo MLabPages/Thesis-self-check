@@ -50,23 +50,26 @@ export async function verifyBibliography(references) {
     import.meta.env.VITE_BIBLIOGRAPHY_API_ENABLED === "true" ||
     (!import.meta.env.DEV && !isLocalHost);
 
-  for (const [index, reference] of references.entries()) {
-    if (index > 0) {
-      await new Promise((resolve) => window.setTimeout(resolve, 700));
-    }
-    if (!apiAvailable) {
-      findings.push({
+  if (!apiAvailable) {
+    return [
+      {
         id: crypto.randomUUID(),
         category: "引用・参考文献",
         severity: "info",
-        location: `参考文献 ${reference.id.replace("ref", "")}`,
+        location: "参考文献一覧",
         title: "書誌照合は公開環境で実行されます",
-        original: reference.text,
+        original: `${references.length}件の参考文献を読み取りました。`,
         suggestion:
           "Vercel公開版ではCrossrefとCiNii Researchで照合し、差異がある項目だけを表示します。",
-        reason: "通常のローカル開発サーバーには書誌照合APIがありません。",
-      });
-      continue;
+        reason:
+          "通常のローカル開発サーバーには書誌照合APIがないため、ここではまとめて案内しています。",
+      },
+    ];
+  }
+
+  for (const [index, reference] of references.entries()) {
+    if (index > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
     }
     try {
       const response = await fetch("/api/bibliography", {
