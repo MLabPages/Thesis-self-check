@@ -176,6 +176,111 @@ function checkLogic(document) {
   return findings;
 }
 
+function checkCompletionReadiness(document) {
+  const findings = [];
+  const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
+  const bodyParagraphs = document.paragraphs.filter(
+    (paragraph) => paragraph.text && !paragraph.isHeading,
+  );
+  const hasResearchReview = /(先行研究|既存研究|レビュー|理論|概念|定義)/.test(fullText);
+  const hasSurveyOrInterview = /(調査|アンケート|インタビュー|質問紙|分析)/.test(fullText);
+  const hasDesignDetails =
+    /(調査対象|対象者|調査日|調査期間|選定理由|質問項目|分析方法|分析ソフト|サンプル|回答者|手続き)/.test(
+      fullText,
+    );
+  const hasResultSection = /(結果|分析結果)/.test(fullText);
+  const hasDiscussionLanguage = /(考察|示唆|解釈|要因|理由|比較|明らかになった|と考えられる)/.test(
+    fullText,
+  );
+  const hasFigureOrTableMention = /(?:図|表)\s*[0-9０-９]+/.test(fullText);
+  const hasSourceLabel = /(出典|出所|作成|参考|引用)/.test(fullText);
+
+  if (hasSurveyOrInterview && !hasResearchReview) {
+    findings.push(
+      result({
+        category: "完成度・教員コメント観点",
+        severity: "info",
+        location: "調査・分析の前後",
+        title: "先行研究から調査へつながっているか確認",
+        original: "調査・分析に関する語は見つかりましたが、先行研究や概念整理の語が少ない可能性があります。",
+        suggestion:
+          "調査に入る前に、既存研究で何が分かっていて、何が不足しているため自分の調査が必要なのかを説明してください。",
+        reason:
+          "教員コメントでは、レビューを踏まえて調査目的や方法を位置づける修正が多く見られました。",
+      }),
+    );
+  }
+
+  if (hasSurveyOrInterview && !hasDesignDetails) {
+    findings.push(
+      result({
+        category: "完成度・教員コメント観点",
+        severity: "info",
+        location: "調査方法",
+        title: "調査設計の具体性を確認",
+        original: "調査や分析への言及があります。",
+        suggestion:
+          "調査対象、選定理由、調査日・期間、質問項目、分析方法、使用ソフトなどを方法の章で説明しているか確認してください。",
+        reason:
+          "初稿へのコメントでは、結果だけでなく調査設計を具体的に書くよう求める指摘が目立ちました。",
+      }),
+    );
+  }
+
+  for (const paragraph of bodyParagraphs) {
+    if (/(自分の経験|私の経験|個人的な経験|体験談|私自身|自分自身)/.test(paragraph.text)) {
+      findings.push(
+        result({
+          category: "完成度・教員コメント観点",
+          severity: "warning",
+          location: paragraphLocation(paragraph),
+          title: "個人的経験が根拠になっていないか確認",
+          original: paragraph.text,
+          suggestion:
+            "個人的な経験は研究動機として整理し、主張の根拠には資料・データ・先行研究・調査結果を示してください。",
+          reason:
+            "教員コメントでは、個人的エピソードを根拠として使わず、確認できる資料へ置き換える指摘がありました。",
+        }),
+      );
+      break;
+    }
+  }
+
+  if (hasFigureOrTableMention && !hasSourceLabel) {
+    findings.push(
+      result({
+        category: "完成度・教員コメント観点",
+        severity: "info",
+        location: "図表",
+        title: "図表の出典・自作表記を確認",
+        original: "本文中に図表番号が見つかりました。",
+        suggestion:
+          "図表ごとに、出典、自作・筆者作成、加工の有無を示しているか確認してください。詳細な文献情報は参考文献欄に置きます。",
+        reason:
+          "完成版に向けた修正では、図表の出典、脚注、参考文献欄の使い分けがよく指摘されていました。",
+      }),
+    );
+  }
+
+  if (hasResultSection && !hasDiscussionLanguage) {
+    findings.push(
+      result({
+        category: "完成度・教員コメント観点",
+        severity: "info",
+        location: "結果・考察",
+        title: "結果を解釈・考察まで進めているか確認",
+        original: "結果や分析結果への言及があります。",
+        suggestion:
+          "結果を示すだけで終わらず、なぜその結果になったのか、先行研究と比べて何が言えるのか、研究目的にどう答えるのかを書いてください。",
+        reason:
+          "教員コメントでは、結果の説明から考察・示唆へつなげる修正が複数見られました。",
+      }),
+    );
+  }
+
+  return findings;
+}
+
 function checkFigures(document) {
   const findings = [];
   const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
@@ -249,6 +354,7 @@ export function runLocalChecks(document, selectedChecks) {
     format: checkFormat,
     writing: checkWriting,
     logic: checkLogic,
+    completion: checkCompletionReadiness,
     figures: checkFigures,
     citations: checkCitations,
     ethics: checkEthics,
