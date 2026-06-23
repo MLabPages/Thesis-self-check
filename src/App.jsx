@@ -59,6 +59,19 @@ const CHECKS = [
     icon: TreeStructure,
   },
   {
+    id: "completion",
+    label: "完成度・教員コメント観点",
+    short: "完成度",
+    description: "初稿から完成版へ直すときに指摘されやすい観点を確認",
+    details: [
+      "先行研究から調査目的へのつながり",
+      "調査設計・分析方法の具体性",
+      "個人的経験ではなく資料やデータで根拠を示しているか",
+      "結果から考察・示唆へ進めているか",
+    ],
+    icon: ClipboardText,
+  },
+  {
     id: "figures",
     label: "図表",
     short: "図表",
