@@ -69,8 +69,19 @@ function isStructurallyLong(sentence) {
   );
 }
 
+function hasJapaneseAsciiComma(text) {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー々],|,[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー々]/u.test(
+    text,
+  );
+}
+
+function isBulletLikeParagraph(text) {
+  return /^\s*[・●■◆\-－]/.test(text);
+}
+
 function checkWriting(document) {
   const findings = [];
+  let asciiCommaFindings = 0;
   const rules = [
     {
       regex: /(私は|自分は|筆者は).{0,20}(思う|感じる)/,
@@ -107,6 +118,22 @@ function checkWriting(document) {
           }),
         );
       }
+    }
+    if (asciiCommaFindings < 3 && hasJapaneseAsciiComma(paragraph.text)) {
+      asciiCommaFindings += 1;
+      findings.push(
+        result({
+          category: "誤字脱字・文章表現",
+          severity: "info",
+          location: paragraphLocation(paragraph),
+          title: "日本語文中の半角カンマを確認",
+          original: paragraph.text,
+          suggestion:
+            "日本語の本文では、研究室・提出先の指定に応じて「，」や「、」へ統一してください。英語文献名やURL内のカンマは除外して考えてかまいません。",
+          reason:
+            "教員コメントでは、日本語本文中のカンマを全角に統一する指摘が複数見られました。",
+        }),
+      );
     }
     const longSentences = splitSentences(paragraph.text).filter(isStructurallyLong);
     for (const sentence of longSentences) {
@@ -185,7 +212,7 @@ function checkCompletionReadiness(document) {
   const hasResearchReview = /(先行研究|既存研究|レビュー|理論|概念|定義)/.test(fullText);
   const hasSurveyOrInterview = /(調査|アンケート|インタビュー|質問紙|分析)/.test(fullText);
   const hasDesignDetails =
-    /(調査対象|対象者|調査日|調査期間|選定理由|質問項目|分析方法|分析ソフト|サンプル|回答者|手続き)/.test(
+    /(調査対象|対象者|調査日|調査期間|選定理由|質問項目|分析方法|分析ソフト|使用ソフト|ソフト名|バージョン|サンプル|回答者|手続き|有効回答|回収|尺度|因子分析|回帰分析|相関分析|共分散|SPSS|Excel|R|Python|AMOS|KH Coder|jamovi|SmartPLS)/i.test(
       fullText,
     );
   const hasResultSection = /(結果|分析結果)/.test(fullText);
@@ -194,6 +221,9 @@ function checkCompletionReadiness(document) {
   );
   const hasFigureOrTableMention = /(?:図|表)\s*[0-9０-９]+/.test(fullText);
   const hasSourceLabel = /(出典|出所|作成|参考|引用)/.test(fullText);
+  const bulletLikeParagraphs = bodyParagraphs.filter((paragraph) =>
+    isBulletLikeParagraph(paragraph.text),
+  );
 
   if (hasSurveyOrInterview && !hasResearchReview) {
     findings.push(
@@ -223,6 +253,22 @@ function checkCompletionReadiness(document) {
           "調査対象、選定理由、調査日・期間、質問項目、分析方法、使用ソフトなどを方法の章で説明しているか確認してください。",
         reason:
           "初稿へのコメントでは、結果だけでなく調査設計を具体的に書くよう求める指摘が目立ちました。",
+      }),
+    );
+  }
+
+  if (bulletLikeParagraphs.length >= 3) {
+    findings.push(
+      result({
+        category: "完成度・教員コメント観点",
+        severity: "info",
+        location: "文書全体",
+        title: "箇条書きのまま残っていないか確認",
+        original: `箇条書きのような段落を${bulletLikeParagraphs.length}件検出しました。`,
+        suggestion:
+          "方法、結果、考察の本文では、必要に応じて箇条書きを文章に直し、前後の説明を補ってください。チェックリストや質問項目として必要な箇条書きは残してかまいません。",
+        reason:
+          "教員コメントでは、メモ的な箇条書きを論文本文の説明文へ整える指摘が繰り返し見られました。",
       }),
     );
   }
