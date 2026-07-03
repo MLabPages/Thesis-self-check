@@ -140,6 +140,29 @@ function SiteHeader() {
   );
 }
 
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="copy-button"
+      type="button"
+      title="コピーした文をWordの検索（Ctrl+F）に貼り付けると該当箇所へ移動できます"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 2000);
+        } catch {
+          /* クリップボードが使えない環境では何もしない */
+        }
+      }}
+    >
+      <ClipboardText size={14} />
+      {copied ? "コピーしました" : "原文をコピー"}
+    </button>
+  );
+}
+
 function ResultGuidance({ findings }) {
   const important = findings.filter((finding) => finding.severity === "important").length;
   const warnings = findings.filter((finding) => finding.severity === "warning").length;
@@ -192,10 +215,23 @@ function ResultsScreen({ documentData, findings, onBack }) {
     <div className="app-shell">
       <SiteHeader />
       <main className="results-page">
-        <button className="back-button" type="button" onClick={onBack}>
-          <ArrowLeft size={19} />
-          設定に戻る
-        </button>
+        <div className="results-toolbar">
+          <button className="back-button" type="button" onClick={onBack}>
+            <ArrowLeft size={19} />
+            設定に戻る
+          </button>
+          <button
+            className="print-button"
+            type="button"
+            onClick={() => {
+              setFilter("すべて");
+              window.setTimeout(() => window.print(), 100);
+            }}
+          >
+            <FileDoc size={17} />
+            結果を印刷 / PDFに保存
+          </button>
+        </div>
 
         <div className="results-heading">
           <div>
@@ -223,6 +259,7 @@ function ResultsScreen({ documentData, findings, onBack }) {
           {[
             [TreeStructure, "見出し", documentData.stats.headings],
             [TextAa, "本文段落", documentData.stats.paragraphs],
+            [ChartBar, "図", documentData.stats.figures ?? 0],
             [Table, "表", documentData.stats.tables],
             [Info, "脚注", documentData.stats.footnotes],
             [Books, "参考文献", documentData.stats.references],
@@ -262,7 +299,8 @@ function ResultsScreen({ documentData, findings, onBack }) {
               <ShieldCheck size={20} />
               <p>
                 現在は端末内で実行できる基本チェックです。AI詳細チェックを接続する場合も、
-                氏名・メール・学籍番号候補をマスクしてから必要な段落だけを送信します。
+                メールアドレス・電話番号・学籍番号候補をマスクしてから必要な段落だけを送信します。
+                氏名は自動検出できないため、送信前に本文へ残っていないか自分でも確認してください。
               </p>
             </div>
           </aside>
@@ -289,7 +327,10 @@ function ResultsScreen({ documentData, findings, onBack }) {
                   <h4>{finding.title}</h4>
                   <div className="comparison">
                     <div>
-                      <span>確認した箇所</span>
+                      <div className="comparison-label">
+                        <span>確認した箇所</span>
+                        <CopyButton text={finding.original} />
+                      </div>
                       <p>{finding.original}</p>
                     </div>
                     <ArrowRight size={20} />
@@ -345,7 +386,7 @@ export function App() {
   const [expanded, setExpanded] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState("idle");
-  const [progress, setProgress] = useState(0);
+  const [stageText, setStageText] = useState("");
   const [error, setError] = useState("");
   const [documentData, setDocumentData] = useState(null);
   const [findings, setFindings] = useState([]);
@@ -359,12 +400,12 @@ export function App() {
   );
 
   async function chooseFile(nextFile) {
+    if (!nextFile) return;
     setError("");
     setStatus("parsing");
-    setProgress(0);
+    setStageText("");
     setDocumentData(null);
     setFindings([]);
-    if (!nextFile) return;
 
     const isDocx =
       nextFile.name.toLowerCase().endsWith(".docx") ||
@@ -433,37 +474,34 @@ export function App() {
       return;
     }
     setStatus("processing");
-    setProgress(20);
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    setProgress(60);
+    setStageText("基本チェックを実行しています…");
     const localFindings = runLocalChecks(documentData, selected);
-    let combinedFindings = [...localFindings];
+    const combinedFindings = [...localFindings];
     if (selected.includes("citations") && documentData.references.length > 0) {
-      const bibliographyFindings = await verifyBibliography(documentData.references);
+      const bibliographyFindings = await verifyBibliography(documentData.references, {
+        onProgress: (done, total) =>
+          setStageText(`参考文献を照合しています… ${done} / ${total}件`),
+      });
       combinedFindings.push(...bibliographyFindings);
     }
     if (useAi && aiEnabled) {
+      setStageText("AI詳細チェックを実行しています…（数十秒かかることがあります）");
       try {
         const aiResult = await requestAiReview(documentData, selected);
-        combinedFindings = [...localFindings, ...(aiResult.findings ?? [])];
+        combinedFindings.push(...(aiResult.findings ?? []));
       } catch (aiError) {
-        combinedFindings = [
-          ...localFindings,
-          {
-            id: crypto.randomUUID(),
-            category: "AI詳細チェック",
-            severity: "info",
-            location: "文書全体",
-            title: "AI詳細チェックを実行できませんでした",
-            original: aiError.message,
-            suggestion: "基本チェックの結果を確認し、公開環境のAPI設定を管理者へ確認してください。",
-            reason: "Wordファイルや未マスクの個人情報は外部へ送信されていません。",
-          },
-        ];
+        combinedFindings.push({
+          id: crypto.randomUUID(),
+          category: "AI詳細チェック",
+          severity: "info",
+          location: "文書全体",
+          title: "AI詳細チェックを実行できませんでした",
+          original: aiError.message,
+          suggestion: "基本チェックの結果を確認し、公開環境のAPI設定を管理者へ確認してください。",
+          reason: "Wordファイルや未マスクの個人情報は外部へ送信されていません。",
+        });
       }
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    setProgress(100);
     setFindings(combinedFindings);
     setStatus("complete");
   }
@@ -576,6 +614,7 @@ export function App() {
               <strong>文書を読み取りました</strong>
               <span>本文 {documentData.stats.paragraphs}段落</span>
               <span>見出し {documentData.stats.headings}件</span>
+              <span>図 {documentData.stats.figures ?? 0}件</span>
               <span>表 {documentData.stats.tables}件</span>
               <span>脚注 {documentData.stats.footnotes}件</span>
               <span>参考文献 {documentData.stats.references}件</span>
@@ -691,11 +730,10 @@ export function App() {
             <div className="processing" aria-live="polite">
               <div>
                 <FileMagnifyingGlass size={22} />
-                <strong>文書をチェックしています…</strong>
-                <span>{progress}%</span>
+                <strong>{stageText || "文書をチェックしています…"}</strong>
               </div>
               <div className="progress-track">
-                <div style={{ width: `${progress}%` }} />
+                <div className="progress-indeterminate" />
               </div>
               <p>ファイルはこのブラウザのメモリ上だけで処理されています。</p>
             </div>
@@ -755,12 +793,12 @@ export function App() {
               <Clock size={28} />
             </span>
             <div className="flow-content">
-              <h3>チェックの流れ（目安）</h3>
+              <h3>チェックの流れ（目安・基本チェック時）</h3>
               <div className="flow-steps">
                 {[
-                  ["1", "アップロード", "30秒〜1分"],
-                  ["2", "自動チェック", "2〜5分"],
-                  ["3", "結果の生成", "1〜2分"],
+                  ["1", "アップロード", "数秒"],
+                  ["2", "自動チェック", "数秒〜1分"],
+                  ["3", "結果の表示", "すぐ"],
                 ].map(([number, label, time], index) => (
                   <div className="flow-step" key={number}>
                     <span>{number}</span>

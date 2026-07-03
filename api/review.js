@@ -1,4 +1,7 @@
+import { checkOrigin, isRateLimited } from "./_lib/guard.js";
+
 const MAX_PAYLOAD_CHARS = 120_000;
+const REQUESTS_PER_MINUTE = 6;
 
 function responseJson(response) {
   for (const item of response.output ?? []) {
@@ -13,6 +16,12 @@ export default async function handler(request, response) {
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
     return response.status(405).json({ error: "Method not allowed" });
+  }
+  if (!checkOrigin(request)) {
+    return response.status(403).json({ error: "Forbidden" });
+  }
+  if (isRateLimited(request, REQUESTS_PER_MINUTE)) {
+    return response.status(429).json({ error: "Too many requests" });
   }
   if (!process.env.OPENAI_API_KEY) {
     return response.status(503).json({ error: "AI review is not configured" });
@@ -33,19 +42,25 @@ export default async function handler(request, response) {
     `入力データ: ${payloadText}`,
   ].join("\n");
 
-  const apiResponse = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      store: false,
-      input: prompt,
-      max_output_tokens: 6000,
-    }),
-  });
+  let apiResponse;
+  try {
+    apiResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        store: false,
+        input: prompt,
+        max_output_tokens: 6000,
+        text: { format: { type: "json_object" } },
+      }),
+    });
+  } catch {
+    return response.status(502).json({ error: "AI review request failed" });
+  }
 
   if (!apiResponse.ok) {
     return response.status(502).json({ error: "AI review request failed" });
