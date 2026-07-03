@@ -41,7 +41,22 @@ function bibliographyFinding(reference, result) {
   };
 }
 
-export async function verifyBibliography(references) {
+function apiUnavailableFinding(referenceCount) {
+  return {
+    id: crypto.randomUUID(),
+    category: "引用・参考文献",
+    severity: "info",
+    location: "参考文献一覧",
+    title: "この公開環境では書誌照合を利用できません",
+    original: `${referenceCount}件の参考文献を読み取りました。`,
+    suggestion:
+      "書誌照合APIが見つからないため、照合を中止しました。Vercel公開版で再実行するか、CiNii ResearchやGoogle Scholarで手動確認してください。",
+    reason:
+      "GitHub Pagesなどの静的ホスティングには書誌照合APIがありません。基本チェックの結果には影響しません。",
+  };
+}
+
+export async function verifyBibliography(references, { onProgress } = {}) {
   const findings = [];
   const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(
     window.location.hostname,
@@ -71,12 +86,19 @@ export async function verifyBibliography(references) {
     if (index > 0) {
       await new Promise((resolve) => window.setTimeout(resolve, 700));
     }
+    onProgress?.(index + 1, references.length);
     try {
       const response = await fetch("/api/bibliography", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reference: reference.text }),
       });
+      const contentType = response.headers.get("content-type") ?? "";
+      if (response.status === 404 || !contentType.includes("json")) {
+        // APIそのものが存在しない環境（静的ホスティング等）。残りの照会を中止する
+        findings.push(apiUnavailableFinding(references.length));
+        break;
+      }
       if (!response.ok) throw new Error("lookup unavailable");
       const result = await response.json();
       const finding = bibliographyFinding(reference, result);

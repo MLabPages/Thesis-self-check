@@ -185,6 +185,14 @@ button:focus-visible, [role="button"]:focus-visible {
 .progress-track div {
   height: 100%; border-radius: inherit; background: var(--accent); transition: width 300ms ease;
 }
+.progress-indeterminate {
+  width: 34%;
+  animation: progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(340%); }
+}
 .processing p { color: var(--muted); font-size: 12px; }
 .result-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .result-copy { display: flex; align-items: center; gap: 12px; }
@@ -254,6 +262,12 @@ footer {
   margin: 0 auto;
   padding: 25px clamp(22px,3vw,46px) 40px;
 }
+.results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
 .back-button {
   padding: 7px 0;
   display: flex;
@@ -266,6 +280,20 @@ footer {
   font-weight: 700;
   cursor: pointer;
 }
+.print-button {
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--navy);
+  background: rgba(255,255,255,.8);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.print-button:hover { background: var(--soft); }
 .results-heading {
   margin-top: 14px;
   padding-bottom: 24px;
@@ -297,7 +325,7 @@ footer {
   margin: 20px 0;
   padding: 14px 17px;
   display: grid;
-  grid-template-columns: repeat(5,1fr);
+  grid-template-columns: repeat(6,1fr);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255,255,255,.56);
@@ -440,6 +468,26 @@ footer {
 }
 .comparison > div:last-child { background: #f2f5f8; }
 .comparison span { color: var(--muted); font-size: 10px; font-weight: 700; }
+.comparison-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.copy-button {
+  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--soft-line);
+  border-radius: 5px;
+  color: var(--navy);
+  background: white;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.copy-button:hover { background: var(--soft); }
 .comparison p {
   margin: 5px 0 0;
   overflow-wrap: anywhere;
@@ -485,6 +533,15 @@ footer {
   background: rgba(255,255,255,.65);
 }
 .empty-findings p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+
+@media print {
+  .results-toolbar, .filter-panel, .ai-note, footer { display: none; }
+  .results-layout { display: block; }
+  .finding-card { break-inside: avoid; border: 1px solid #bbb; }
+  .copy-button { display: none; }
+  .site-header { border-bottom: 1px solid #bbb; background: white; }
+  body { background: white; }
+}
 
 @media (max-width: 1050px) {
   .site-header { align-items: flex-start; }

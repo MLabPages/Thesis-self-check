@@ -1,3 +1,8 @@
+import { checkOrigin, isRateLimited } from "./_lib/guard.js";
+
+// 書誌照合は1文献ごとに呼ばれるため、レビューAPIより高い上限にする
+const REQUESTS_PER_MINUTE = 60;
+
 function normalize(value) {
   return String(value ?? "")
     .normalize("NFKC")
@@ -339,6 +344,12 @@ export default async function handler(request, response) {
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
     return response.status(405).json({ error: "Method not allowed" });
+  }
+  if (!checkOrigin(request)) {
+    return response.status(403).json({ error: "Forbidden" });
+  }
+  if (isRateLimited(request, REQUESTS_PER_MINUTE)) {
+    return response.status(429).json({ error: "Too many requests" });
   }
 
   const reference = String(request.body?.reference ?? "").trim().slice(0, 1000);

@@ -106,9 +106,12 @@ function extractFootnotes(xmlText) {
     .filter((item) => item.text);
 }
 
+const REFERENCE_HEADING =
+  /^\s*(?:第\s*[0-9０-９一二三四五六七八九十]{1,3}\s*[章節]|[0-9０-９]{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ]+)?\s*[．.，,、:：]?\s*(?:参考・引用文献|参考文献|引用文献|文献一覧|参考資料|references|bibliography)\s*(?:一覧)?\s*$/i;
+
 function splitReferences(paragraphs) {
   const start = paragraphs.findIndex((paragraph) =>
-    /^(参考文献|引用文献|文献一覧|references|bibliography)\s*$/i.test(paragraph.text),
+    REFERENCE_HEADING.test(paragraph.text),
   );
   if (start < 0) return { bodyParagraphs: paragraphs, references: [] };
 
@@ -123,6 +126,19 @@ function splitReferences(paragraphs) {
         text: paragraph.text,
       })),
   };
+}
+
+function collectBlocks(node, paragraphs, tables, styleMap) {
+  for (const child of node.children) {
+    if (child.localName === "p") {
+      paragraphs.push(paragraphInfo(child, paragraphs.length, styleMap));
+    } else if (child.localName === "tbl") {
+      tables.push(tableInfo(child, tables.length));
+    } else if (child.localName === "sdt" || child.localName === "sdtContent") {
+      // 目次などのコンテンツコントロール内の段落も本文として扱う
+      collectBlocks(child, paragraphs, tables, styleMap);
+    }
+  }
 }
 
 function createSections(paragraphs) {
@@ -164,14 +180,9 @@ export async function parseDocx(file) {
 
   const paragraphs = [];
   const tables = [];
-  for (const child of body.children) {
-    if (child.localName === "p") {
-      paragraphs.push(paragraphInfo(child, paragraphs.length, styleMap));
-    }
-    if (child.localName === "tbl") {
-      tables.push(tableInfo(child, tables.length));
-    }
-  }
+  collectBlocks(body, paragraphs, tables, styleMap);
+  const figureCount =
+    descendants(body, "drawing").length + descendants(body, "pict").length;
 
   const { bodyParagraphs, references } = splitReferences(paragraphs);
   const footnotes = extractFootnotes(footnotesXml);
@@ -190,6 +201,7 @@ export async function parseDocx(file) {
       paragraphs: bodyParagraphs.filter((paragraph) => paragraph.text).length,
       headings: bodyParagraphs.filter((paragraph) => paragraph.isHeading && paragraph.text).length,
       tables: tables.length,
+      figures: figureCount,
       footnotes: footnotes.length,
       references: references.length,
     },
