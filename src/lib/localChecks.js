@@ -13,8 +13,21 @@ function result({ category, severity = "warning", location, title, original, sug
   };
 }
 
-function paragraphLocation(paragraph) {
-  return `本文 ${paragraph.index}段落`;
+function buildSectionMap(document) {
+  const map = new Map();
+  for (const section of document.sections ?? []) {
+    if (section.heading === "本文") continue;
+    for (const paragraph of section.paragraphs) {
+      map.set(paragraph.id, section.heading);
+    }
+  }
+  return map;
+}
+
+function paragraphLocation(paragraph, sectionMap) {
+  const base = `本文 ${paragraph.index}段落`;
+  const heading = sectionMap?.get(paragraph.id);
+  return heading ? `${heading} ＞ ${base}` : base;
 }
 
 function splitSentences(text) {
@@ -79,9 +92,103 @@ function isBulletLikeParagraph(text) {
   return /^\s*[・●■◆\-－]/.test(text);
 }
 
-function checkWriting(document) {
+const POLITE_SENTENCE = /(です|ます|でした|ました|ません|でしょう)(?:ね|よ)?[。！？!?」）)]*$/;
+
+function isPoliteSentence(sentence) {
+  return POLITE_SENTENCE.test(sentence.trim());
+}
+
+// 「」内の引用文は文体判定から除外する
+function withoutQuotes(text) {
+  return text.replace(/「[^」]*」/g, "").replace(/『[^』]*』/g, "");
+}
+
+function checkStyleMixture(document, sectionMap) {
+  const politeHits = [];
+  const plainHits = [];
+  for (const paragraph of document.paragraphs) {
+    if (!paragraph.text || paragraph.isHeading || isBulletLikeParagraph(paragraph.text)) continue;
+    for (const sentence of splitSentences(withoutQuotes(paragraph.text))) {
+      if (sentence.length < 8) continue;
+      (isPoliteSentence(sentence) ? politeHits : plainHits).push({ paragraph, sentence });
+    }
+  }
+  if (politeHits.length < 3 || plainHits.length < 3) return [];
+
+  const minority = politeHits.length <= plainHits.length ? politeHits : plainHits;
+  const minorityLabel = minority === politeHits ? "です・ます調" : "である調";
+  return minority.slice(0, 5).map(({ paragraph, sentence }) =>
+    result({
+      category: "誤字脱字・文章表現",
+      location: paragraphLocation(paragraph, sectionMap),
+      title: "文体の混在（です・ます／である）",
+      original: sentence,
+      suggestion: `文書内で「です・ます調」${politeHits.length}文と「である調」${plainHits.length}文が混在しています。研究室の指定に合わせてどちらかへ統一してください。`,
+      reason: `少数派の${minorityLabel}の文を最大5件表示しています。どちらかに統一されている場合、この指摘は表示されません。`,
+    }),
+  );
+}
+
+// 同一文書内に両方の表記が現れた場合だけ指摘するペア
+const VARIANT_PAIRS = [
+  ["行う", "行なう"],
+  ["表す", "表わす"],
+  ["現れる", "現われる"],
+  ["サーバー", "サーバ"],
+  ["コンピューター", "コンピュータ"],
+  ["ユーザー", "ユーザ"],
+  ["ブラウザー", "ブラウザ"],
+  ["インタビュー", "インタヴュー"],
+  ["問い合わせ", "問合せ"],
+  ["取り組み", "取組み"],
+  ["および", "及び"],
+  ["ならびに", "並びに"],
+  ["さらに", "更に"],
+  ["ただし", "但し"],
+  ["すなわち", "即ち"],
+];
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function countVariant(text, word, sibling) {
+  // 「サーバ」のように相手表記の前方部分と重なる語は、後続の文字を除外して数える
+  const pattern = sibling.startsWith(word)
+    ? new RegExp(`${escapeRegExp(word)}(?!${escapeRegExp(sibling.slice(word.length, word.length + 1))})`, "g")
+    : new RegExp(escapeRegExp(word), "g");
+  return (text.match(pattern) ?? []).length;
+}
+
+function checkVariantSpelling(fullText) {
   const findings = [];
+  for (const [first, second] of VARIANT_PAIRS) {
+    const firstCount = countVariant(fullText, first, second);
+    const secondCount = countVariant(fullText, second, first);
+    if (firstCount > 0 && secondCount > 0) {
+      findings.push(
+        result({
+          category: "誤字脱字・文章表現",
+          severity: "info",
+          location: "文書全体",
+          title: `表記ゆれ：「${first}」と「${second}」`,
+          original: `「${first}」${firstCount}回、「${second}」${secondCount}回が同じ文書内で使われています。`,
+          suggestion: "どちらかの表記に統一してください。WordのCtrl+Hですべて置換できます。",
+          reason: "同じ語の表記が揺れていると、推敲不足の印象を与えます。どちらが正しいかは研究室の指定に従ってください。",
+        }),
+      );
+    }
+  }
+  return findings.slice(0, 5);
+}
+
+function checkWriting(document, sectionMap) {
+  const findings = [];
+  const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
   let asciiCommaFindings = 0;
+  let duplicateFindings = 0;
+  let fullwidthFindings = 0;
+  const hasHalfwidthAlnum = /[0-9A-Za-z]/.test(fullText);
   const rules = [
     {
       regex: /(私は|自分は|筆者は).{0,20}(思う|感じる)/,
@@ -95,12 +202,6 @@ function checkWriting(document) {
       suggestion: "「考えられる」「示唆される」など、根拠に応じた表現を検討してください。",
       reason: "「思う」は感想として読まれやすい表現です。",
     },
-    {
-      regex: /です。|ます。/,
-      title: "文体の混在候補",
-      suggestion: "大学・研究室の指定に応じて「である」調へ統一してください。",
-      reason: "論文内で「です・ます」調と「である」調が混在していないか確認が必要です。",
-    },
   ];
 
   for (const paragraph of document.paragraphs) {
@@ -110,7 +211,7 @@ function checkWriting(document) {
         findings.push(
           result({
             category: "誤字脱字・文章表現",
-            location: paragraphLocation(paragraph),
+            location: paragraphLocation(paragraph, sectionMap),
             title: rule.title,
             original: paragraph.text,
             suggestion: rule.suggestion,
@@ -119,13 +220,45 @@ function checkWriting(document) {
         );
       }
     }
+    const duplicateMatch = paragraph.text.match(/([のにをがへで])\1(?![ぁ-ん])|、、|。。/);
+    if (duplicateFindings < 5 && duplicateMatch) {
+      duplicateFindings += 1;
+      findings.push(
+        result({
+          category: "誤字脱字・文章表現",
+          location: paragraphLocation(paragraph, sectionMap),
+          title: `助詞・句読点の重複の可能性（「${duplicateMatch[0]}」）`,
+          original: paragraph.text,
+          suggestion: `「${duplicateMatch[0]}」の前後を読み直し、書き損じであれば削除してください。`,
+          reason: "編集の途中で助詞や句読点が二重に残ることがよくあります。意図的な表記であれば無視してください。",
+        }),
+      );
+    }
+    if (
+      fullwidthFindings < 3 &&
+      hasHalfwidthAlnum &&
+      /[０-９Ａ-Ｚａ-ｚ]/.test(paragraph.text)
+    ) {
+      fullwidthFindings += 1;
+      findings.push(
+        result({
+          category: "誤字脱字・文章表現",
+          severity: "info",
+          location: paragraphLocation(paragraph, sectionMap),
+          title: "全角の英数字が混在しています",
+          original: paragraph.text,
+          suggestion: "文書内で半角英数字と全角英数字が混在しています。研究室の指定に合わせてどちらかへ統一してください。",
+          reason: "英数字の全角・半角が混在していると、書式の統一に関する指摘を受けやすくなります。",
+        }),
+      );
+    }
     if (asciiCommaFindings < 3 && hasJapaneseAsciiComma(paragraph.text)) {
       asciiCommaFindings += 1;
       findings.push(
         result({
           category: "誤字脱字・文章表現",
           severity: "info",
-          location: paragraphLocation(paragraph),
+          location: paragraphLocation(paragraph, sectionMap),
           title: "日本語文中の半角カンマを確認",
           original: paragraph.text,
           suggestion:
@@ -140,7 +273,7 @@ function checkWriting(document) {
       findings.push(
         result({
           category: "誤字脱字・文章表現",
-          location: paragraphLocation(paragraph),
+          location: paragraphLocation(paragraph, sectionMap),
           title: "一文の構造が複雑な可能性",
           original: sentence,
           suggestion:
@@ -151,6 +284,8 @@ function checkWriting(document) {
       );
     }
   }
+  findings.push(...checkStyleMixture(document, sectionMap));
+  findings.push(...checkVariantSpelling(fullText));
   return findings;
 }
 
@@ -168,6 +303,25 @@ function checkFormat(document) {
         reason: "見出しスタイルは目次生成や文書構造の確認に必要です。",
       }),
     );
+  }
+  let levelJumpFindings = 0;
+  let previousLevel = null;
+  for (const heading of document.headings) {
+    const level = heading.headingLevel ?? 1;
+    if (previousLevel !== null && level - previousLevel >= 2 && levelJumpFindings < 3) {
+      levelJumpFindings += 1;
+      findings.push(
+        result({
+          category: "書式・提出形式",
+          location: `本文 ${heading.index}段落`,
+          title: `見出しレベルの飛び（見出し${previousLevel} → 見出し${level}）`,
+          original: heading.text,
+          suggestion: `直前の見出しレベル${previousLevel}から見出し${level}へ飛んでいます。間のレベルを使うか、見出しスタイルの設定を確認してください。`,
+          reason: "見出しレベルが飛ぶと、目次の階層や章・節の構造が崩れて見えます。",
+        }),
+      );
+    }
+    previousLevel = level;
   }
   return findings;
 }
@@ -203,7 +357,7 @@ function checkLogic(document) {
   return findings;
 }
 
-function checkCompletionReadiness(document) {
+function checkCompletionReadiness(document, sectionMap) {
   const findings = [];
   const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
   const bodyParagraphs = document.paragraphs.filter(
@@ -279,7 +433,7 @@ function checkCompletionReadiness(document) {
         result({
           category: "完成度・教員コメント観点",
           severity: "warning",
-          location: paragraphLocation(paragraph),
+          location: paragraphLocation(paragraph, sectionMap),
           title: "個人的経験が根拠になっていないか確認",
           original: paragraph.text,
           suggestion:
@@ -327,11 +481,44 @@ function checkCompletionReadiness(document) {
   return findings;
 }
 
+function toHalfwidthNumber(value) {
+  return Number(value.replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0)));
+}
+
+function missingNumberFindings(fullText, kind) {
+  // 「図1-2」のような章別番号を使う文書では欠番判定をしない
+  if (new RegExp(`${kind}\\s*[0-9０-９]+\\s*[-－.．][0-9０-９]`).test(fullText)) return [];
+  const numbers = [
+    ...new Set(
+      [...fullText.matchAll(new RegExp(`${kind}\\s*([0-9０-９]+)`, "g"))].map((match) =>
+        toHalfwidthNumber(match[1]),
+      ),
+    ),
+  ].sort((left, right) => left - right);
+  if (numbers.length < 2) return [];
+  const missing = [];
+  for (let expected = 1; expected <= numbers[numbers.length - 1]; expected += 1) {
+    if (!numbers.includes(expected)) missing.push(expected);
+  }
+  if (missing.length === 0 || missing.length > 5) return [];
+  return [
+    result({
+      category: "図表",
+      location: "文書全体",
+      title: `${kind}番号に欠番の可能性（${missing.map((number) => `${kind}${number}`).join("・")}）`,
+      original: `本文中で参照されている${kind}番号：${numbers.map((number) => `${kind}${number}`).join("、")}`,
+      suggestion: `${missing.map((number) => `${kind}${number}`).join("・")}が本文で参照されていません。番号の振り直し忘れ、または${kind}の削除に伴う参照の消し忘れがないか確認してください。`,
+      reason: `${kind}番号は1から順に連続させるのが原則です。意図的な構成であれば無視してください。`,
+    }),
+  ];
+}
+
 function checkFigures(document) {
   const findings = [];
   const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
-  const figureMentions = fullText.match(/(?:図|表)\s*[0-9０-９]+/g) ?? [];
-  if (document.tables.length > 0 && figureMentions.length === 0) {
+  const tableMentions = fullText.match(/表\s*[0-9０-９]+/g) ?? [];
+  const figureMentions = fullText.match(/図\s*[0-9０-９]+/g) ?? [];
+  if (document.tables.length > 0 && tableMentions.length === 0) {
     findings.push(
       result({
         category: "図表",
@@ -343,6 +530,20 @@ function checkFigures(document) {
       }),
     );
   }
+  if ((document.stats.figures ?? 0) > 0 && figureMentions.length === 0) {
+    findings.push(
+      result({
+        category: "図表",
+        location: `図 ${document.stats.figures}件`,
+        title: "図番号または本文からの参照を確認",
+        original: `${document.stats.figures}件の図（画像）を検出しましたが、「図1」などの参照を検出できませんでした。`,
+        suggestion: "各図に番号・タイトル・出典を付け、本文から参照してください。",
+        reason: "図表は本文の説明と対応させる必要があります。",
+      }),
+    );
+  }
+  findings.push(...missingNumberFindings(fullText, "図"));
+  findings.push(...missingNumberFindings(fullText, "表"));
   return findings;
 }
 
@@ -381,12 +582,15 @@ function checkCitations(document) {
   return findings;
 }
 
-function checkEthics(document) {
+function checkEthics(document, sectionMap) {
   return findSensitiveText(document).map((finding) =>
     result({
       category: "研究倫理・個人情報",
       severity: "important",
-      location: finding.paragraphId.replace("p", "本文 ") + "段落",
+      location:
+        (sectionMap?.get(finding.paragraphId) ? `${sectionMap.get(finding.paragraphId)} ＞ ` : "") +
+        finding.paragraphId.replace("p", "本文 ") +
+        "段落",
       title: `${finding.type}の可能性`,
       original: finding.value,
       suggestion: "匿名化、削除、または掲載同意の有無を確認してください。",
@@ -396,6 +600,7 @@ function checkEthics(document) {
 }
 
 export function runLocalChecks(document, selectedChecks) {
+  const sectionMap = buildSectionMap(document);
   const checks = {
     format: checkFormat,
     writing: checkWriting,
@@ -405,5 +610,5 @@ export function runLocalChecks(document, selectedChecks) {
     citations: checkCitations,
     ethics: checkEthics,
   };
-  return selectedChecks.flatMap((id) => checks[id]?.(document) ?? []);
+  return selectedChecks.flatMap((id) => checks[id]?.(document, sectionMap) ?? []);
 }
