@@ -26,6 +26,22 @@ function bibliographyFinding(reference, result) {
     };
   }
 
+  if (result.bookLike) {
+    return {
+      id: crypto.randomUUID(),
+      category: "引用・参考文献",
+      severity: "info",
+      location,
+      title: "書籍のため自動照合の対象外です",
+      original: reference.text,
+      suggestion:
+        "書籍は論文データベース（Crossref・CiNii）に載っていないことが多く、自動照合できません。Google Scholarや出版社ページで書誌情報を確認してください。",
+      reason:
+        "文献が存在しない、または記載が誤っているという判定ではありません。書籍と判定した文献は照合結果を警告として表示しません。",
+      bibliography: result,
+    };
+  }
+
   return {
     id: crypto.randomUUID(),
     category: "引用・参考文献",

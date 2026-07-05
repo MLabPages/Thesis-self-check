@@ -1,6 +1,6 @@
 import { findSensitiveText } from "./privacy.js";
 
-function result({ category, severity = "warning", location, title, original, suggestion, reason }) {
+function result({ category, severity = "warning", location, title, original, suggestion, reason, ranges }) {
   return {
     id: crypto.randomUUID(),
     category,
@@ -10,6 +10,8 @@ function result({ category, severity = "warning", location, title, original, sug
     original,
     suggestion,
     reason,
+    // original内で強調表示する文字位置 [[開始, 終了], ...]
+    ranges,
   };
 }
 
@@ -82,10 +84,27 @@ function isStructurallyLong(sentence) {
   );
 }
 
-function hasJapaneseAsciiComma(text) {
-  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー々],|,[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー々]/u.test(
-    text,
-  );
+const JAPANESE_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー々]/u;
+
+// 日本語の地の文で読点として使われている半角カンマの位置を返す。
+// （）や () の中は出典表記（例：(Brakus, 2008)）であることが多いため対象外とする。
+function japaneseAsciiCommaRanges(text) {
+  const ranges = [];
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "（" || character === "(") depth += 1;
+    else if (character === "）" || character === ")") depth = Math.max(0, depth - 1);
+    else if (character === "," && depth === 0) {
+      const previous = text[index - 1] ?? "";
+      const nextIndex = text[index + 1] === " " ? index + 2 : index + 1;
+      const next = text[nextIndex] ?? "";
+      if (JAPANESE_CHAR.test(previous) || JAPANESE_CHAR.test(next)) {
+        ranges.push([index, index + 1]);
+      }
+    }
+  }
+  return ranges;
 }
 
 function isBulletLikeParagraph(text) {
@@ -231,6 +250,7 @@ function checkWriting(document, sectionMap) {
           original: paragraph.text,
           suggestion: `「${duplicateMatch[0]}」の前後を読み直し、書き損じであれば削除してください。`,
           reason: "編集の途中で助詞や句読点が二重に残ることがよくあります。意図的な表記であれば無視してください。",
+          ranges: [[duplicateMatch.index, duplicateMatch.index + duplicateMatch[0].length]],
         }),
       );
     }
@@ -252,19 +272,22 @@ function checkWriting(document, sectionMap) {
         }),
       );
     }
-    if (asciiCommaFindings < 3 && hasJapaneseAsciiComma(paragraph.text)) {
+    const commaRanges =
+      asciiCommaFindings < 3 ? japaneseAsciiCommaRanges(paragraph.text) : [];
+    if (commaRanges.length > 0) {
       asciiCommaFindings += 1;
       findings.push(
         result({
           category: "誤字脱字・文章表現",
           severity: "info",
           location: paragraphLocation(paragraph, sectionMap),
-          title: "日本語文中の半角カンマを確認",
+          title: `日本語文中の半角カンマを確認（${commaRanges.length}か所・赤色で表示）`,
           original: paragraph.text,
           suggestion:
-            "日本語の本文では、研究室・提出先の指定に応じて「，」や「、」へ統一してください。英語文献名やURL内のカンマは除外して考えてかまいません。",
+            "日本語の文章中の読点は、全角の「，」または「、」へ統一してください（どちらにするかは研究室・提出先の指定に従ってください）。（ ）内の出典表記（例：(Brakus, 2008)）やURL内の半角カンマはそのままで問題ありません。",
           reason:
-            "教員コメントでは、日本語本文中のカンマを全角に統一する指摘が複数見られました。",
+            "赤く表示した箇所が該当する半角カンマです。（ ）内の出典表記は検出対象から除外しています。教員コメントでは、日本語本文中のカンマを全角に統一する指摘が複数見られました。",
+          ranges: commaRanges,
         }),
       );
     }
