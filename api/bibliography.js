@@ -87,9 +87,13 @@ function extractReferenceFields(reference) {
     reference
       .match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i)?.[0]
       ?.replace(/[.,;)\]]+$/, "") ?? null;
+  const quotedTitle = reference.match(/「([^」]{3,})」/)?.[1] ?? null;
+  const bookTitle = reference.match(/『([^』]{3,})』/)?.[1] ?? null;
+  // 「」がなく『』だけの日本語文献は書籍とみなす（『』は書名であり掲載誌名ではない）
+  const isJapaneseBook = !quotedTitle && Boolean(bookTitle);
   const japaneseTitle =
-    reference.match(/「([^」]{3,})」/)?.[1] ??
-    reference.match(/『([^』]{3,})』/)?.[1] ??
+    quotedTitle ??
+    bookTitle ??
     reference.match(/[“"]([^”"]{5,})[”"]/)?.[1] ??
     null;
   const afterYear = year
@@ -104,9 +108,11 @@ function extractReferenceFields(reference) {
     .map((part) => part.trim().replace(/[.。]+$/, ""))
     .filter((part) => part.length >= 5);
   const title = japaneseTitle ?? englishParts[0] ?? null;
-  const journal = reference.match(/『([^』]{2,})』/)?.[1] ?? englishParts[1] ?? null;
+  const journal = isJapaneseBook
+    ? null
+    : reference.match(/『([^』]{2,})』/)?.[1] ?? englishParts[1] ?? null;
   const authorArea = reference.split(/(?:19|20)\d{2}/)[0] ?? "";
-  return { year, doi, title, journal, authorArea };
+  return { year, doi, title, journal, authorArea, isJapaneseBook };
 }
 
 function scoreMatch(reference, fields, match) {
@@ -156,6 +162,17 @@ function isReliableMatch(reference, fields, match) {
   ) / 100 >= 0.58;
 }
 
+// データベース側の誌名は「ジュリスト = Monthly jurist / 有斐閣 [編]」のように
+// 欧文併記や編者が付くことが多いため、片方がもう片方に含まれていれば一致とみなす
+function journalMatches(provided, database) {
+  const left = normalize(provided);
+  const right = normalize(database);
+  if (left.length >= 3 && right.length >= 3 && (right.includes(left) || left.includes(right))) {
+    return true;
+  }
+  return similarity(provided, database) >= 0.72;
+}
+
 function compareFields(fields, match) {
   const differences = [];
   const checkedFields = [];
@@ -195,7 +212,7 @@ function compareFields(fields, match) {
   }
   if (fields.journal && match.journal) {
     checkedFields.push("掲載誌");
-    if (similarity(fields.journal, match.journal) < 0.72) {
+    if (!journalMatches(fields.journal, match.journal)) {
       differences.push({
         field: "掲載誌",
         provided: fields.journal,
@@ -321,7 +338,9 @@ async function searchCinii(reference, fields) {
   const queries = queryVariants(fields.title || reference).slice(0, 3);
   for (const [index, query] of queries.entries()) {
     if (index > 0) await wait(650);
-    const url = new URL("https://cir.nii.ac.jp/opensearch/articles");
+    // 書籍は論文検索に載らないため、書籍らしい文献は横断検索（all）を使う
+    const endpoint = fields.isJapaneseBook ? "all" : "articles";
+    const url = new URL(`https://cir.nii.ac.jp/opensearch/${endpoint}`);
     url.searchParams.set("q", query);
     url.searchParams.set("count", "5");
     url.searchParams.set("start", "1");
@@ -387,16 +406,36 @@ export default async function handler(request, response) {
   }
 
   const comparison = compareFields(fields, bestMatch);
+  const doiConfirmed =
+    fields.doi && bestMatch.doi && normalize(fields.doi) === normalize(bestMatch.doi);
+  const titleDiffers = comparison.differences.some(
+    (difference) => difference.field === "題名",
+  );
+  const links = {
+    source: bestMatch.url,
+    cinii: `https://cir.nii.ac.jp/all?q=${encodeURIComponent(fields.title || reference)}`,
+    scholar: `https://scholar.google.com/scholar?q=${encodeURIComponent(fields.title || reference)}`,
+  };
+
+  // 題名自体が一致しない候補は「同名に近い別文献」を掴んだ可能性が高いので、
+  // 記載ミスとしての差異報告はせず、確認保留として返す（DOIが一致する場合を除く）
+  if (titleDiffers && !doiConfirmed) {
+    return response.status(200).json({
+      status: "unconfirmed",
+      bestMatch,
+      differences: [],
+      checkedFields: comparison.checkedFields,
+      providers: [...new Set(matches.map((match) => match.provider))],
+      links,
+    });
+  }
+
   return response.status(200).json({
     status: comparison.differences.length ? "mismatch" : "verified",
     bestMatch,
     differences: comparison.differences,
     checkedFields: comparison.checkedFields,
     providers: [...new Set(matches.map((match) => match.provider))],
-    links: {
-      source: bestMatch.url,
-      cinii: `https://cir.nii.ac.jp/all?q=${encodeURIComponent(fields.title || reference)}`,
-      scholar: `https://scholar.google.com/scholar?q=${encodeURIComponent(fields.title || reference)}`,
-    },
+    links,
   });
 }
