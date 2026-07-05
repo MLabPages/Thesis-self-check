@@ -21,7 +21,23 @@ function bibliographyFinding(reference, result) {
       title: "書誌情報に差異があります",
       original: reference.text,
       suggestion: differenceText(result.differences),
-      reason: `${result.bestMatch.provider}の候補と照合しました。記載順は判定せず、値が異なる項目だけを表示しています。`,
+      reason: `${result.bestMatch.provider}の候補と照合しました。記載順は判定せず、値が異なる項目だけを表示しています。データベース側が別の版・別の文献の可能性もあるため、「原典候補」リンクの内容も確認してください。`,
+      bibliography: result,
+    };
+  }
+
+  if (result.bookLike) {
+    return {
+      id: crypto.randomUUID(),
+      category: "引用・参考文献",
+      severity: "info",
+      location,
+      title: "書籍のため自動照合の対象外です",
+      original: reference.text,
+      suggestion:
+        "書籍は論文データベース（Crossref・CiNii）に載っていないことが多く、自動照合できません。Google Scholarや出版社ページで書誌情報を確認してください。",
+      reason:
+        "文献が存在しない、または記載が誤っているという判定ではありません。書籍と判定した文献は照合結果を警告として表示しません。",
       bibliography: result,
     };
   }
