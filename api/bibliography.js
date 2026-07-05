@@ -33,6 +33,18 @@ function compact(values) {
   return [...new Set(values.filter(Boolean).map(String))];
 }
 
+// Crossrefのデータには「Psychology &amp; Marketing」のように
+// HTMLエスケープされた文字が残っていることがある
+function decodeHtmlEntities(value) {
+  return String(value ?? "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;|&#0?39;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+}
+
 function crossrefYear(item, key) {
   return item[key]?.["date-parts"]?.[0]?.[0] ?? null;
 }
@@ -103,16 +115,26 @@ function extractReferenceFields(reference) {
         .replace(/https?:\/\/\S+/g, "")
         .trim()
     : "";
+  // 「vs.」「et al.」などの略語のピリオドで題名が切れないよう保護してから分割する
   const englishParts = afterYear
+    .replace(/\b(vs|et al|e\.g|i\.e|cf|Vol|No|pp|ed|eds|Jr|St)\./gi, (abbrev) =>
+      abbrev.replace(/\.$/, "\u0001"),
+    )
     .split(/\.\s+/)
-    .map((part) => part.trim().replace(/[.。]+$/, ""))
+    .map((part) => part.replace(/\u0001/g, ".").trim().replace(/[.。]+$/, ""))
     .filter((part) => part.length >= 5);
   const title = japaneseTitle ?? englishParts[0] ?? null;
-  const journal = isJapaneseBook
+  // 英語文献の掲載誌は「Journal, 23(11), 927-959」のように巻号が続くため誌名だけ残す
+  const englishJournal = englishParts[1]?.split(/,\s*\d/)[0]?.trim() ?? null;
+  // 巻号・ページ表記がない英語文献は書籍とみなす（2番目の要素は出版社名なので掲載誌にしない）
+  const hasVolumeOrPages = /\d+\s*\(\d+\)|\d+\s*[–\-−]\s*\d+/.test(reference);
+  const isEnglishBook = !japaneseTitle && !doi && !hasVolumeOrPages && englishParts.length >= 2;
+  const isBook = isJapaneseBook || isEnglishBook;
+  const journal = isBook
     ? null
-    : reference.match(/『([^』]{2,})』/)?.[1] ?? englishParts[1] ?? null;
+    : reference.match(/『([^』]{2,})』/)?.[1] ?? englishJournal;
   const authorArea = reference.split(/(?:19|20)\d{2}/)[0] ?? "";
-  return { year, doi, title, journal, authorArea, isJapaneseBook };
+  return { year, doi, title, journal, authorArea, isJapaneseBook, isBook };
 }
 
 function scoreMatch(reference, fields, match) {
@@ -173,13 +195,23 @@ function journalMatches(provided, database) {
   return similarity(provided, database) >= 0.72;
 }
 
+// データベースが副題を持たない場合があるため、一方が他方の先頭部分（十分な長さ）で
+// あれば同じ題名とみなす。前方一致に限定し、「視点 ○○」のような別記事は除外する
+function titleMatches(provided, database) {
+  if (similarity(provided, database) >= 0.86) return true;
+  const left = normalize(provided);
+  const right = normalize(database);
+  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
+  return shorter.length >= 12 && longer.startsWith(shorter);
+}
+
 function compareFields(fields, match) {
   const differences = [];
   const checkedFields = [];
 
   if (fields.title && match.title) {
     checkedFields.push("題名");
-    if (similarity(fields.title, match.title) < 0.86) {
+    if (!titleMatches(fields.title, match.title)) {
       differences.push({
         field: "題名",
         provided: fields.title,
@@ -244,11 +276,16 @@ function crossrefMatch(item, reference, fields, confidenceOverride = null) {
   const match = {
     provider: "Crossref",
     doi: item.DOI ?? null,
-    title: item.title?.[0] ?? "",
-    authors: (item.author ?? [])
-      .map((author) => [author.family, author.given].filter(Boolean).join(" "))
-      .join(", "),
-    journal: item["container-title"]?.[0] ?? "",
+    // Crossrefは副題（subtitle）を別フィールドで持つため、結合して比較する
+    title: decodeHtmlEntities(
+      [item.title?.[0], item.subtitle?.[0]].filter(Boolean).join(": "),
+    ),
+    authors: decodeHtmlEntities(
+      (item.author ?? [])
+        .map((author) => [author.family, author.given].filter(Boolean).join(" "))
+        .join(", "),
+    ),
+    journal: decodeHtmlEntities(item["container-title"]?.[0] ?? ""),
     year: yearCandidates[0] ?? null,
     yearCandidates,
     url: item.URL ?? null,
@@ -285,9 +322,9 @@ function ciniiMatch(item, reference, fields) {
   const match = {
     provider: "CiNii Research",
     doi,
-    title: item.title ?? "",
-    authors: orderedCreators.join(", "),
-    journal: item["prism:publicationName"] ?? "",
+    title: decodeHtmlEntities(item.title ?? ""),
+    authors: decodeHtmlEntities(orderedCreators.join(", ")),
+    journal: decodeHtmlEntities(item["prism:publicationName"] ?? ""),
     year: String(publicationDate).match(/(?:19|20)\d{2}/)?.[0] ?? null,
     url: item.link?.["@id"] ?? item["@id"] ?? null,
   };
@@ -339,7 +376,7 @@ async function searchCinii(reference, fields) {
   for (const [index, query] of queries.entries()) {
     if (index > 0) await wait(650);
     // 書籍は論文検索に載らないため、書籍らしい文献は横断検索（all）を使う
-    const endpoint = fields.isJapaneseBook ? "all" : "articles";
+    const endpoint = fields.isBook ? "all" : "articles";
     const url = new URL(`https://cir.nii.ac.jp/opensearch/${endpoint}`);
     url.searchParams.set("q", query);
     url.searchParams.set("count", "5");
@@ -394,6 +431,7 @@ export default async function handler(request, response) {
   if (!bestMatch || bestMatch.confidence < 0.43) {
     return response.status(200).json({
       status: "not_found",
+      bookLike: Boolean(fields.isBook),
       bestMatch: null,
       differences: [],
       checkedFields: [],
@@ -422,6 +460,7 @@ export default async function handler(request, response) {
   if (titleDiffers && !doiConfirmed) {
     return response.status(200).json({
       status: "unconfirmed",
+      bookLike: Boolean(fields.isBook),
       bestMatch,
       differences: [],
       checkedFields: comparison.checkedFields,

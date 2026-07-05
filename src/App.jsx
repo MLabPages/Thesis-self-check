@@ -163,6 +163,24 @@ function CopyButton({ text }) {
   );
 }
 
+function HighlightedText({ text, ranges }) {
+  if (!Array.isArray(ranges) || ranges.length === 0) return text;
+  const parts = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < cursor || end > text.length) continue;
+    if (start > cursor) parts.push(text.slice(cursor, start));
+    parts.push(
+      <mark className="finding-highlight" key={start}>
+        {text.slice(start, end)}
+      </mark>,
+    );
+    cursor = end;
+  }
+  parts.push(text.slice(cursor));
+  return parts;
+}
+
 function ResultGuidance({ findings }) {
   const important = findings.filter((finding) => finding.severity === "important").length;
   const warnings = findings.filter((finding) => finding.severity === "warning").length;
@@ -331,7 +349,9 @@ function ResultsScreen({ documentData, findings, onBack }) {
                         <span>確認した箇所</span>
                         <CopyButton text={finding.original} />
                       </div>
-                      <p>{finding.original}</p>
+                      <p>
+                        <HighlightedText text={finding.original} ranges={finding.ranges} />
+                      </p>
                     </div>
                     <ArrowRight size={20} />
                     <div>
