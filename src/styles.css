@@ -488,6 +488,13 @@ footer {
   cursor: pointer;
 }
 .copy-button:hover { background: var(--soft); }
+.finding-highlight {
+  padding: 0 2px;
+  border-radius: 3px;
+  color: #a3081a;
+  background: #ffdfe1;
+  font-weight: 700;
+}
 .comparison p {
   margin: 5px 0 0;
   overflow-wrap: anywhere;
