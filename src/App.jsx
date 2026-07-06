@@ -59,19 +59,6 @@ const CHECKS = [
     icon: TreeStructure,
   },
   {
-    id: "completion",
-    label: "完成度・教員コメント観点",
-    short: "完成度",
-    description: "初稿から完成版へ直すときに指摘されやすい観点を確認",
-    details: [
-      "先行研究から調査目的へのつながり",
-      "調査設計・分析方法の具体性",
-      "個人的経験ではなく資料やデータで根拠を示しているか",
-      "結果から考察・示唆へ進めているか",
-    ],
-    icon: ClipboardText,
-  },
-  {
     id: "figures",
     label: "図表",
     short: "図表",
@@ -99,6 +86,19 @@ const CHECKS = [
     description: "不適切な表現、剽窃の疑い、個人情報の記載の有無を確認",
     details: ["個人情報と匿名化", "転載・剽窃への注意", "生成AI利用の申告確認"],
     icon: ShieldCheck,
+  },
+  {
+    id: "completion",
+    label: "研究内容・妥当性",
+    short: "妥当性",
+    description: "研究目的，調査設計，根拠，考察・示唆の妥当性を確認",
+    details: [
+      "先行研究から調査目的へのつながり",
+      "調査設計・分析方法の具体性",
+      "個人的経験ではなく資料やデータで根拠を示しているか",
+      "結果から考察・示唆へ進めているか",
+    ],
+    icon: ClipboardText,
   },
 ];
 
