@@ -89,9 +89,9 @@ const CHECKS = [
   },
   {
     id: "completion",
-    label: "完成度・仕上げの観点",
-    short: "完成度",
-    description: "完成度を高める際に指摘されやすい観点を確認",
+    label: "研究内容・妥当性",
+    short: "妥当性",
+    description: "研究目的，調査設計，根拠，考察・示唆の妥当性を確認",
     details: [
       "先行研究から調査目的へのつながり",
       "調査設計・分析方法の具体性",
