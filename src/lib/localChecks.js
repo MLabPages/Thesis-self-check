@@ -405,7 +405,7 @@ function checkCompletionReadiness(document, sectionMap) {
   if (hasSurveyOrInterview && !hasResearchReview) {
     findings.push(
       result({
-        category: "完成度・仕上げの観点",
+        category: "研究内容・妥当性",
         severity: "info",
         location: "調査・分析の前後",
         title: "先行研究から調査へつながっているか確認",
@@ -421,7 +421,7 @@ function checkCompletionReadiness(document, sectionMap) {
   if (hasSurveyOrInterview && !hasDesignDetails) {
     findings.push(
       result({
-        category: "完成度・仕上げの観点",
+        category: "研究内容・妥当性",
         severity: "info",
         location: "調査方法",
         title: "調査設計の具体性を確認",
@@ -437,7 +437,7 @@ function checkCompletionReadiness(document, sectionMap) {
   if (bulletLikeParagraphs.length >= 3) {
     findings.push(
       result({
-        category: "完成度・仕上げの観点",
+        category: "研究内容・妥当性",
         severity: "info",
         location: "文書全体",
         title: "箇条書きのまま残っていないか確認",
@@ -454,7 +454,7 @@ function checkCompletionReadiness(document, sectionMap) {
     if (/(自分の経験|私の経験|個人的な経験|体験談|私自身|自分自身)/.test(paragraph.text)) {
       findings.push(
         result({
-          category: "完成度・仕上げの観点",
+          category: "研究内容・妥当性",
           severity: "warning",
           location: paragraphLocation(paragraph, sectionMap),
           title: "個人的経験が根拠になっていないか確認",
@@ -472,7 +472,7 @@ function checkCompletionReadiness(document, sectionMap) {
   if (hasFigureOrTableMention && !hasSourceLabel) {
     findings.push(
       result({
-        category: "完成度・仕上げの観点",
+        category: "研究内容・妥当性",
         severity: "info",
         location: "図表",
         title: "図表の出典・自作表記を確認",
@@ -488,7 +488,7 @@ function checkCompletionReadiness(document, sectionMap) {
   if (hasResultSection && !hasDiscussionLanguage) {
     findings.push(
       result({
-        category: "完成度・仕上げの観点",
+        category: "研究内容・妥当性",
         severity: "info",
         location: "結果・考察",
         title: "結果を解釈・考察まで進めているか確認",
