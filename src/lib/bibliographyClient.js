@@ -26,6 +26,22 @@ function bibliographyFinding(reference, result) {
     };
   }
 
+  if (result.status === "doi_unconfirmed") {
+    return {
+      id: crypto.randomUUID(),
+      category: "引用・参考文献",
+      severity: "warning",
+      location,
+      title: "DOIを確認できませんでした",
+      original: reference.text,
+      suggestion:
+        "DOIの文字列に入力ミスがないか確認し、DOIリンクまたは原典ページを開いてください。",
+      reason:
+        "記載されたDOIと完全一致する文献をCrossrefまたはCiNii Researchで確認できませんでした。データベース側の一時的な問題もあるため、誤りとは断定しません。",
+      bibliography: result,
+    };
+  }
+
   if (result.bookLike) {
     return {
       id: crypto.randomUUID(),
@@ -73,7 +89,7 @@ function apiUnavailableFinding(referenceCount) {
 }
 
 export async function verifyBibliography(references, { onProgress } = {}) {
-  const findings = [];
+  const indexedFindings = [];
   const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(
     window.location.hostname,
   );
@@ -98,39 +114,57 @@ export async function verifyBibliography(references, { onProgress } = {}) {
     ];
   }
 
-  for (const [index, reference] of references.entries()) {
-    if (index > 0) {
-      await new Promise((resolve) => window.setTimeout(resolve, 700));
-    }
-    onProgress?.(index + 1, references.length);
-    try {
-      const response = await fetch("/api/bibliography", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reference: reference.text }),
-      });
-      const contentType = response.headers.get("content-type") ?? "";
-      if (response.status === 404 || !contentType.includes("json")) {
-        // APIそのものが存在しない環境（静的ホスティング等）。残りの照会を中止する
-        findings.push(apiUnavailableFinding(references.length));
-        break;
+  let cursor = 0;
+  let completed = 0;
+  let stopLookups = false;
+
+  async function worker() {
+    while (!stopLookups) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= references.length) return;
+      const reference = references[index];
+      try {
+        const response = await fetch("/api/bibliography", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reference: reference.text }),
+        });
+        const contentType = response.headers.get("content-type") ?? "";
+        if (response.status === 404 || !contentType.includes("json")) {
+          if (!stopLookups) {
+            indexedFindings.push({ index: -1, finding: apiUnavailableFinding(references.length) });
+          }
+          stopLookups = true;
+          return;
+        }
+        if (!response.ok) throw new Error("lookup unavailable");
+        const result = await response.json();
+        const finding = bibliographyFinding(reference, result);
+        if (finding) indexedFindings.push({ index, finding });
+      } catch {
+        indexedFindings.push({
+          index,
+          finding: {
+            id: crypto.randomUUID(),
+            category: "引用・参考文献",
+            severity: "info",
+            location: `参考文献 ${reference.id.replace("ref", "")}`,
+            title: "書誌データベースへ接続できませんでした",
+            original: reference.text,
+            suggestion: "公開環境で再実行するか、CiNii Researchで手動確認してください。",
+            reason: "基本チェックは完了していますが、外部書誌照合APIを利用できませんでした。",
+          },
+        });
+      } finally {
+        completed += 1;
+        onProgress?.(completed, references.length);
       }
-      if (!response.ok) throw new Error("lookup unavailable");
-      const result = await response.json();
-      const finding = bibliographyFinding(reference, result);
-      if (finding) findings.push(finding);
-    } catch {
-      findings.push({
-        id: crypto.randomUUID(),
-        category: "引用・参考文献",
-        severity: "info",
-        location: `参考文献 ${reference.id.replace("ref", "")}`,
-        title: "書誌データベースへ接続できませんでした",
-        original: reference.text,
-        suggestion: "公開環境で再実行するか、CiNii Researchで手動確認してください。",
-        reason: "基本チェックは完了していますが、外部書誌照合APIを利用できませんでした。",
-      });
     }
   }
-  return findings;
+
+  await Promise.all(Array.from({ length: Math.min(2, references.length) }, () => worker()));
+  return indexedFindings
+    .sort((left, right) => left.index - right.index)
+    .map((item) => item.finding);
 }

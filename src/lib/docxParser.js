@@ -45,13 +45,19 @@ function buildStyleMap(stylesXml) {
   return styles;
 }
 
+export function isDocumentTitleStyle(styleId, styleName) {
+  return [styleId, styleName].some((value) =>
+    /^(title|タイトル)$/i.test(String(value).trim()),
+  );
+}
+
 function paragraphInfo(node, index, styleMap) {
   const styleId = attr(first(first(node, "pPr"), "pStyle"), "val");
   const styleName = styleMap.get(styleId) || styleId || "";
   const outlineValue = attr(first(first(node, "pPr"), "outlineLvl"), "val");
   const outlineLevel = outlineValue === "" ? null : Number(outlineValue);
   // Word の「タイトル」スタイルは表紙用であることが多く、章見出しとは区別する
-  const isDocumentTitle = /(^|\s)(title|タイトル)(\s|$)/i.test(`${styleId} ${styleName}`);
+  const isDocumentTitle = isDocumentTitleStyle(styleId, styleName);
   const isHeading =
     !isDocumentTitle &&
     (/heading|見出し/i.test(`${styleId} ${styleName}`) ||
@@ -115,6 +121,16 @@ const REFERENCE_HEADING =
 // 参考文献の後に置かれる付録や謝辞まで文献として数えない
 const REFERENCE_END_HEADING =
   /^\s*(?:第\s*[0-9０-９一二三四五六七八九十]{1,3}\s*[章節]|[0-9０-９]{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ]+)?\s*[．.，,、:：]?\s*(?:付録|補遺|謝辞|あとがき|索引|用語集|appendix|acknowledg(?:e)?ments?)\s*$/i;
+const NAMED_APPENDIX_HEADING =
+  /^\s*(?:付録|補遺|appendix)\s*[A-ZＡ-Ｚ0-9０-９一二三四五六七八九十]?\s*(?:[.．:：\-－]\s*)?(?:\S.{0,48})?$/i;
+
+export function isReferenceEndParagraph(paragraph) {
+  const text = paragraph.text.trim();
+  if (REFERENCE_END_HEADING.test(text)) return true;
+  if (!NAMED_APPENDIX_HEADING.test(text)) return false;
+  // 文献名が偶然 Appendix で始まるケースを避け、短い見出しらしい段落だけを対象にする
+  return paragraph.isHeading || !/(?:19|20)\d{2}|https?:|doi\b/i.test(text);
+}
 
 function splitReferences(paragraphs) {
   const start = paragraphs.findIndex((paragraph) =>
@@ -124,12 +140,14 @@ function splitReferences(paragraphs) {
 
   const endOffset = paragraphs
     .slice(start + 1)
-    .findIndex((paragraph) => REFERENCE_END_HEADING.test(paragraph.text));
+    .findIndex(isReferenceEndParagraph);
   const referenceParagraphs =
     endOffset < 0 ? paragraphs.slice(start + 1) : paragraphs.slice(start + 1, start + 1 + endOffset);
+  const paragraphsAfterReferences =
+    endOffset < 0 ? [] : paragraphs.slice(start + 1 + endOffset);
 
   return {
-    bodyParagraphs: paragraphs.slice(0, start),
+    bodyParagraphs: [...paragraphs.slice(0, start), ...paragraphsAfterReferences],
     references: referenceParagraphs
       .filter((paragraph) => paragraph.text)
       .map((paragraph, index) => ({

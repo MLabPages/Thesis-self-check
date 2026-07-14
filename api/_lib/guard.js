@@ -10,7 +10,12 @@ export function checkOrigin(request) {
   const source = request.headers.origin ?? request.headers.referer ?? "";
   const allowed = process.env.ALLOWED_ORIGIN;
   if (allowed) {
-    return source.startsWith(allowed.replace(/\/$/, ""));
+    if (!source) return false;
+    try {
+      return new URL(source).origin === new URL(allowed).origin;
+    } catch {
+      return false;
+    }
   }
   // ALLOWED_ORIGIN未設定時は、Originが送られてきた場合のみ同一ホストか確認する
   // （curl等のOriginなしリクエストはレート制限側で抑える）

@@ -31,11 +31,17 @@ npm run dev
 
 ## AI詳細チェック
 
+AI詳細チェックはオプションで、既定では無効です。`VITE_AI_REVIEW_ENABLED=false`
+の環境では利用項目自体を表示しません。公開サイトで管理者のAPIキーを共用すると
+利用料金と送信データの管理責任が管理者へ集中するため、大学内限定など利用者を
+管理できる場合だけ有効にしてください。
+
 Vercelなどのサーバー環境で次を設定します。
 
 ```text
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4o-mini
+AI_REVIEW_ENABLED=true
 VITE_AI_REVIEW_ENABLED=true
 CROSSREF_MAILTO=管理者のメールアドレス
 CINII_APP_ID=CiNiiのAPI利用登録で取得したID
@@ -49,8 +55,12 @@ ALLOWED_ORIGIN=https://公開サイトのURL（API保護用・推奨）
 利用が広がる場合はVercelのFirewall等の併用を検討してください。
 
 APIキーはフロントエンドやGitHubへ記載しないでください。`/api/review` は
-マスク済みの構造化テキストだけをOpenAI Responses APIへ送信し、`store: false`
-を指定します。
+元のWordファイルではなく、メールアドレス・電話番号・学籍番号候補をマスクした
+本文の抽出テキストをOpenAI Responses APIへ送信し、`store: false`を指定します。
+引用・参考文献チェックを選んだ場合は、参考文献一覧も送信対象になります。
+氏名は自動マスクできないため、利用者自身の確認が必要です。
+`AI_REVIEW_ENABLED`はサーバー側API、`VITE_AI_REVIEW_ENABLED`は画面表示の
+スイッチです。両方が`true`の場合だけ利用し、通常の公開版では両方を`false`にします。
 
 OpenAI APIでは入力内容は標準で学習に使用されませんが、通常のAPI利用では
 不正利用監視ログが最大30日保持される場合があります。厳密な非保持が必要な場合は

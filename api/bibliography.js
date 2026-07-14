@@ -1,7 +1,7 @@
 import { checkOrigin, isRateLimited } from "./_lib/guard.js";
 
 // 書誌照合は1文献ごとに呼ばれるため、レビューAPIより高い上限にする
-const REQUESTS_PER_MINUTE = 60;
+const REQUESTS_PER_MINUTE = 120;
 
 function normalize(value) {
   return String(value ?? "")
@@ -274,7 +274,6 @@ function crossrefMatch(item, reference, fields, confidenceOverride = null) {
     crossrefYear(item, "published"),
     crossrefYear(item, "issued"),
     crossrefYear(item, "published-online"),
-    crossrefYear(item, "created"),
   ]);
   const match = {
     provider: "Crossref",
@@ -356,7 +355,7 @@ async function searchCrossref(reference, fields, headers) {
     url.searchParams.set("rows", "5");
     url.searchParams.set(
       "select",
-      "DOI,title,author,published,published-print,published-online,issued,created,container-title,URL",
+      "DOI,title,author,published,published-print,published-online,issued,container-title,URL",
     );
     if (process.env.CROSSREF_MAILTO) {
       url.searchParams.set("mailto", process.env.CROSSREF_MAILTO);
@@ -430,19 +429,21 @@ export default async function handler(request, response) {
     .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
     .sort((left, right) => right.confidence - left.confidence);
   const bestMatch = matches.find((match) => isReliableMatch(reference, fields, match)) ?? null;
+  const manualLinks = {
+    doi: fields.doi ? `https://doi.org/${encodeURI(fields.doi)}` : null,
+    cinii: `https://cir.nii.ac.jp/all?q=${encodeURIComponent(fields.title || reference)}`,
+    scholar: `https://scholar.google.com/scholar?q=${encodeURIComponent(fields.title || reference)}`,
+  };
 
   if (!bestMatch || bestMatch.confidence < 0.43) {
     return response.status(200).json({
-      status: "not_found",
+      status: fields.doi ? "doi_unconfirmed" : "not_found",
       bookLike: Boolean(fields.isBook),
       bestMatch: null,
       differences: [],
       checkedFields: [],
       providers: ["Crossref", "CiNii Research"],
-      links: {
-        cinii: `https://cir.nii.ac.jp/all?q=${encodeURIComponent(fields.title || reference)}`,
-        scholar: `https://scholar.google.com/scholar?q=${encodeURIComponent(fields.title || reference)}`,
-      },
+      links: manualLinks,
     });
   }
 
@@ -454,8 +455,7 @@ export default async function handler(request, response) {
   );
   const links = {
     source: bestMatch.url,
-    cinii: `https://cir.nii.ac.jp/all?q=${encodeURIComponent(fields.title || reference)}`,
-    scholar: `https://scholar.google.com/scholar?q=${encodeURIComponent(fields.title || reference)}`,
+    ...manualLinks,
   };
 
   // 題名自体が一致しない候補は「同名に近い別文献」を掴んだ可能性が高いので、

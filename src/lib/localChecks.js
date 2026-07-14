@@ -118,14 +118,23 @@ function isCaptionParagraph(paragraph) {
 }
 
 const POLITE_SENTENCE = /(です|ます|でした|ました|ません|でしょう)(?:ね|よ)?[。！？!?」）)]*$/;
+const PLAIN_SENTENCE =
+  /(だ|である|だった|であった|ではない|する|した|される|された|となる|となった|といえる|示す|示した|認められる|考えられる)[。！？!?」）)]*$/;
 
 function isPoliteSentence(sentence) {
   return POLITE_SENTENCE.test(sentence.trim());
 }
 
+function isPlainSentence(sentence) {
+  return PLAIN_SENTENCE.test(sentence.trim());
+}
+
 // 「」内の引用文は文体判定から除外する
 function withoutQuotes(text) {
-  return text.replace(/「[^」]*」/g, "").replace(/『[^』]*』/g, "");
+  return text
+    .replace(/「[^」]*」/g, "")
+    .replace(/『[^』]*』/g, "")
+    .replace(/[“"][^”"]*[”"]/g, "");
 }
 
 function checkStyleMixture(document, sectionMap) {
@@ -142,7 +151,8 @@ function checkStyleMixture(document, sectionMap) {
     }
     for (const sentence of splitSentences(withoutQuotes(paragraph.text))) {
       if (sentence.length < 8) continue;
-      (isPoliteSentence(sentence) ? politeHits : plainHits).push({ paragraph, sentence });
+      if (isPoliteSentence(sentence)) politeHits.push({ paragraph, sentence });
+      else if (isPlainSentence(sentence)) plainHits.push({ paragraph, sentence });
     }
   }
   if (politeHits.length < 3 || plainHits.length < 3) return [];
@@ -220,7 +230,6 @@ function checkWriting(document, sectionMap) {
   let asciiCommaFindings = 0;
   let duplicateFindings = 0;
   let fullwidthFindings = 0;
-  const hasHalfwidthAlnum = /[0-9A-Za-z]/.test(fullText);
   const rules = [
     {
       regex: /(私は|自分は|筆者は).{0,20}(思う|感じる)/,
@@ -238,8 +247,9 @@ function checkWriting(document, sectionMap) {
 
   for (const paragraph of document.paragraphs) {
     if (!paragraph.text || paragraph.isHeading) continue;
+    const proseWithoutQuotes = withoutQuotes(paragraph.text);
     for (const rule of rules) {
-      if (rule.regex.test(paragraph.text)) {
+      if (rule.regex.test(proseWithoutQuotes)) {
         findings.push(
           result({
             category: "誤字脱字・文章表現",
@@ -267,21 +277,27 @@ function checkWriting(document, sectionMap) {
         }),
       );
     }
-    if (
-      fullwidthFindings < 3 &&
-      hasHalfwidthAlnum &&
-      /[０-９Ａ-Ｚａ-ｚ]/.test(paragraph.text)
-    ) {
+    const fullwidthRanges = [...paragraph.text.matchAll(/[０-９Ａ-Ｚａ-ｚ]/g)].map((match) => [
+      match.index,
+      match.index + match[0].length,
+    ]);
+    if (fullwidthFindings < 3 && /[0-9A-Za-z]/.test(paragraph.text) && fullwidthRanges.length) {
       fullwidthFindings += 1;
+      const fullwidthCharacters = [
+        ...new Set(fullwidthRanges.map(([start, end]) => paragraph.text.slice(start, end))),
+      ].join("・");
       findings.push(
         result({
           category: "誤字脱字・文章表現",
           severity: "info",
           location: paragraphLocation(paragraph, sectionMap),
-          title: "全角の英数字が混在しています",
+          title: `全角英数字を確認（「${fullwidthCharacters}」を赤色で表示）`,
           original: paragraph.text,
-          suggestion: "文書内で半角英数字と全角英数字が混在しています。研究室の指定に合わせてどちらかへ統一してください。",
-          reason: "英数字の全角・半角が混在していると、書式の統一に関する指摘を受けやすくなります。",
+          suggestion:
+            "赤く表示した全角英数字を確認してください。日本語の語句として意図的に全角数字を使っている場合は、そのままで問題ありません。",
+          reason:
+            "同じ段落内に半角英数字もある場合だけ表示しています。全角・半角の混在自体を誤りと断定する指摘ではありません。",
+          ranges: fullwidthRanges,
         }),
       );
     }
@@ -413,8 +429,6 @@ function checkCompletionReadiness(document, sectionMap) {
   const hasDiscussionLanguage = /(考察|示唆|解釈|要因|理由|比較|明らかになった|と考えられる|総合的検討|結論|まとめ)/.test(
     fullText,
   );
-  const hasFigureOrTableMention = /(?:図|表)\s*[0-9０-９]+/.test(fullText);
-  const hasSourceLabel = /(出典|出所|作成|参考|引用)/.test(fullText);
   const bulletLikeParagraphs = bodyParagraphs.filter((paragraph) =>
     isBulletLikeParagraph(paragraph.text),
   );
@@ -494,22 +508,6 @@ function checkCompletionReadiness(document, sectionMap) {
     }
   }
 
-  if (hasFigureOrTableMention && !hasSourceLabel) {
-    findings.push(
-      result({
-        category: "研究内容・妥当性",
-        severity: "info",
-        location: "図表",
-        title: "図表の出典・自作表記を確認",
-        original: "本文中に図表番号が見つかりました。",
-        suggestion:
-          "図表ごとに、出典、自作・筆者作成、加工の有無を示しているか確認してください。詳細な文献情報は参考文献欄に置きます。",
-        reason:
-          "完成版に向けた修正では、図表の出典、脚注、参考文献欄の使い分けがよく指摘されていました。",
-      }),
-    );
-  }
-
   if (hasResultSection && !hasDiscussionLanguage) {
     findings.push(
       result({
@@ -567,29 +565,32 @@ function checkFigures(document) {
     ...document.paragraphs.map((paragraph) => paragraph.text),
     ...document.tables.map((table) => table.text),
   ].join("\n");
-  const tableMentions = fullText.match(/表\s*[0-9０-９]+/g) ?? [];
-  const figureMentions = fullText.match(/図\s*[0-9０-９]+/g) ?? [];
-  if (document.tables.length > 0 && tableMentions.length === 0) {
+  // Wordの画像・表要素には表紙ロゴやレイアウト用表も含まれるため、
+  // 要素数だけを根拠に「図表番号がない」とは指摘しない。
+  const sourcePattern = /(出典|出所|筆者作成|著者作成|自作)|\((?:[^()]*,\s*)?(?:19|20)\d{2}\)/;
+  const captionCandidates = document.paragraphs.filter((paragraph) =>
+    /^\s*(?:図|表)\s*[0-9０-９]+/.test(paragraph.text),
+  );
+  const captionsWithoutSource = captionCandidates.filter((paragraph) => {
+    const start = document.paragraphs.findIndex((item) => item.id === paragraph.id);
+    const nearbyText = document.paragraphs
+      .slice(Math.max(0, start - 1), start + 3)
+      .map((item) => item.text)
+      .join(" ");
+    return !sourcePattern.test(nearbyText);
+  });
+  if (captionsWithoutSource.length > 0) {
     findings.push(
       result({
         category: "図表",
-        location: `表 ${document.tables.length}件`,
-        title: "表番号または本文からの参照を確認",
-        original: `${document.tables.length}件の表を検出しましたが、「表1」などの参照を検出できませんでした。`,
-        suggestion: "各表に番号・タイトル・出典を付け、本文から参照してください。",
-        reason: "図表は本文の説明と対応させる必要があります。",
-      }),
-    );
-  }
-  if ((document.stats.figures ?? 0) > 0 && figureMentions.length === 0) {
-    findings.push(
-      result({
-        category: "図表",
-        location: `図 ${document.stats.figures}件`,
-        title: "図番号または本文からの参照を確認",
-        original: `${document.stats.figures}件の図（画像）を検出しましたが、「図1」などの参照を検出できませんでした。`,
-        suggestion: "各図に番号・タイトル・出典を付け、本文から参照してください。",
-        reason: "図表は本文の説明と対応させる必要があります。",
+        severity: "info",
+        location: "図表キャプション",
+        title: "図表の出典・自作表記を確認",
+        original: captionsWithoutSource.slice(0, 3).map((item) => item.text).join("\n"),
+        suggestion:
+          "表示した図表について、出典、自作・筆者作成、加工の有無をキャプション付近に示しているか確認してください。",
+        reason:
+          "図表番号で始まる段落と、その前後の段落だけを確認しています。図中に出典を記載している場合は無視してください。",
       }),
     );
   }

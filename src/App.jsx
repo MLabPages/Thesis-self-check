@@ -317,7 +317,7 @@ function ResultsScreen({ documentData, findings, onBack }) {
               <ShieldCheck size={20} />
               <p>
                 現在は端末内で実行できる基本チェックです。AI詳細チェックを接続する場合も、
-                メールアドレス・電話番号・学籍番号候補をマスクしてから必要な段落だけを送信します。
+                メールアドレス・電話番号・学籍番号候補をマスクしてから抽出テキストを送信します。
                 氏名は自動検出できないため、送信前に本文へ残っていないか自分でも確認してください。
               </p>
             </div>
@@ -368,6 +368,12 @@ function ResultsScreen({ documentData, findings, onBack }) {
                       {finding.bibliography.links.source && (
                         <a href={finding.bibliography.links.source} target="_blank" rel="noreferrer">
                           原典候補
+                          <ArrowRight size={15} />
+                        </a>
+                      )}
+                      {finding.bibliography.links.doi && (
+                        <a href={finding.bibliography.links.doi} target="_blank" rel="noreferrer">
+                          DOIを確認
                           <ArrowRight size={15} />
                         </a>
                       )}
@@ -651,7 +657,8 @@ export function App() {
               <span>
                 <strong>AIによる詳細チェックを利用する</strong>
                 <small>
-                  元のWordではなく、個人情報候補をマスクした必要な段落だけを外部AIへ送信します。
+                  元のWordではなく、個人情報候補をマスクした本文の抽出テキストを外部AIへ送信します。
+                  引用・参考文献を選んだ場合は参考文献一覧も対象です。
                 </small>
               </span>
             </label>

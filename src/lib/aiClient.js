@@ -1,6 +1,7 @@
 import { prepareAiPayload } from "./privacy.js";
 
 const SEVERITIES = new Set(["important", "warning", "info"]);
+const MAX_AI_PAYLOAD_CHARS = 120_000;
 
 // AIの応答は形式が保証されないため、表示前に必ず整形する
 function sanitizeFinding(raw) {
@@ -23,10 +24,16 @@ function sanitizeFinding(raw) {
 }
 
 export async function requestAiReview(document, selectedChecks, signal) {
+  const payload = JSON.stringify(prepareAiPayload(document, selectedChecks));
+  if (payload.length > MAX_AI_PAYLOAD_CHARS) {
+    throw new Error(
+      "文書がAI詳細チェックの上限を超えています。基本チェックは利用できます。AIを使う場合は章ごとに分けて確認してください。",
+    );
+  }
   const response = await fetch("/api/review", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(prepareAiPayload(document, selectedChecks)),
+    body: payload,
     signal,
   });
   if (!response.ok) {
