@@ -128,7 +128,10 @@ function extractReferenceFields(reference) {
   const englishJournal = englishParts[1]?.split(/,\s*\d/)[0]?.trim() ?? null;
   // 巻号・ページ表記がない英語文献は書籍とみなす（2番目の要素は出版社名なので掲載誌にしない）
   const hasVolumeOrPages = /\d+\s*\(\d+\)|\d+\s*[–\-−]\s*\d+/.test(reference);
-  const isEnglishBook = !japaneseTitle && !doi && !hasVolumeOrPages && englishParts.length >= 2;
+  // 巻号の代わりに記事番号を使う雑誌論文（例: 12, e123456）を書籍扱いしない
+  const hasArticleNumber = /\b\d+\s*,\s*(?:e?\d{4,})\b/i.test(reference);
+  const isEnglishBook =
+    !japaneseTitle && !doi && !hasVolumeOrPages && !hasArticleNumber && englishParts.length >= 2;
   const isBook = isJapaneseBook || isEnglishBook;
   const journal = isBook
     ? null

@@ -50,12 +50,15 @@ function paragraphInfo(node, index, styleMap) {
   const styleName = styleMap.get(styleId) || styleId || "";
   const outlineValue = attr(first(first(node, "pPr"), "outlineLvl"), "val");
   const outlineLevel = outlineValue === "" ? null : Number(outlineValue);
+  // Word の「タイトル」スタイルは表紙用であることが多く、章見出しとは区別する
+  const isDocumentTitle = /(^|\s)(title|タイトル)(\s|$)/i.test(`${styleId} ${styleName}`);
   const isHeading =
-    /heading|見出し|タイトル/i.test(`${styleId} ${styleName}`) ||
-    (outlineLevel !== null &&
-      Number.isFinite(outlineLevel) &&
-      outlineLevel >= 0 &&
-      outlineLevel <= 8);
+    !isDocumentTitle &&
+    (/heading|見出し/i.test(`${styleId} ${styleName}`) ||
+      (outlineLevel !== null &&
+        Number.isFinite(outlineLevel) &&
+        outlineLevel >= 0 &&
+        outlineLevel <= 8));
   const levelMatch = `${styleId} ${styleName}`.match(/(?:heading|見出し)\s*([1-9])/i);
 
   return {
@@ -109,16 +112,25 @@ function extractFootnotes(xmlText) {
 const REFERENCE_HEADING =
   /^\s*(?:第\s*[0-9０-９一二三四五六七八九十]{1,3}\s*[章節]|[0-9０-９]{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ]+)?\s*[．.，,、:：]?\s*(?:参考・引用文献|参考文献|引用文献|文献一覧|参考資料|references|bibliography)\s*(?:一覧)?\s*$/i;
 
+// 参考文献の後に置かれる付録や謝辞まで文献として数えない
+const REFERENCE_END_HEADING =
+  /^\s*(?:第\s*[0-9０-９一二三四五六七八九十]{1,3}\s*[章節]|[0-9０-９]{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ]+)?\s*[．.，,、:：]?\s*(?:付録|補遺|謝辞|あとがき|索引|用語集|appendix|acknowledg(?:e)?ments?)\s*$/i;
+
 function splitReferences(paragraphs) {
   const start = paragraphs.findIndex((paragraph) =>
     REFERENCE_HEADING.test(paragraph.text),
   );
   if (start < 0) return { bodyParagraphs: paragraphs, references: [] };
 
+  const endOffset = paragraphs
+    .slice(start + 1)
+    .findIndex((paragraph) => REFERENCE_END_HEADING.test(paragraph.text));
+  const referenceParagraphs =
+    endOffset < 0 ? paragraphs.slice(start + 1) : paragraphs.slice(start + 1, start + 1 + endOffset);
+
   return {
     bodyParagraphs: paragraphs.slice(0, start),
-    references: paragraphs
-      .slice(start + 1)
+    references: referenceParagraphs
       .filter((paragraph) => paragraph.text)
       .map((paragraph, index) => ({
         id: `ref${index + 1}`,

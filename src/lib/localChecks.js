@@ -111,6 +111,12 @@ function isBulletLikeParagraph(text) {
   return /^\s*[・●■◆\-－]/.test(text);
 }
 
+function isCaptionParagraph(paragraph) {
+  return /caption|キャプション|図表番号/i.test(
+    `${paragraph.styleId ?? ""} ${paragraph.styleName ?? ""}`,
+  );
+}
+
 const POLITE_SENTENCE = /(です|ます|でした|ました|ません|でしょう)(?:ね|よ)?[。！？!?」）)]*$/;
 
 function isPoliteSentence(sentence) {
@@ -126,7 +132,14 @@ function checkStyleMixture(document, sectionMap) {
   const politeHits = [];
   const plainHits = [];
   for (const paragraph of document.paragraphs) {
-    if (!paragraph.text || paragraph.isHeading || isBulletLikeParagraph(paragraph.text)) continue;
+    if (
+      !paragraph.text ||
+      paragraph.isHeading ||
+      isCaptionParagraph(paragraph) ||
+      isBulletLikeParagraph(paragraph.text)
+    ) {
+      continue;
+    }
     for (const sentence of splitSentences(withoutQuotes(paragraph.text))) {
       if (sentence.length < 8) continue;
       (isPoliteSentence(sentence) ? politeHits : plainHits).push({ paragraph, sentence });
@@ -352,7 +365,7 @@ function checkFormat(document) {
 function checkLogic(document) {
   const findings = [];
   const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
-  if (!/(目的|研究課題|問い)/.test(fullText)) {
+  if (!/(目的|研究課題|研究の問い|リサーチクエスチョン|本稿の狙い|本研究の狙い|ねらい)/.test(fullText)) {
     findings.push(
       result({
         category: "構成・論理展開",
@@ -365,7 +378,7 @@ function checkLogic(document) {
       }),
     );
   }
-  if (!/(結論|まとめ|おわりに|考察)/.test(fullText)) {
+  if (!/(結論|まとめ|おわりに|考察|終章|総合的検討|総括)/.test(fullText)) {
     findings.push(
       result({
         category: "構成・論理展開",
@@ -382,18 +395,22 @@ function checkLogic(document) {
 
 function checkCompletionReadiness(document, sectionMap) {
   const findings = [];
-  const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
+  // 方法の一覧や図表の出典を表内に置く文書もあるため、完成度確認では表の文字も参照する
+  const fullText = [
+    ...document.paragraphs.map((paragraph) => paragraph.text),
+    ...document.tables.map((table) => table.text),
+  ].join("\n");
   const bodyParagraphs = document.paragraphs.filter(
     (paragraph) => paragraph.text && !paragraph.isHeading,
   );
-  const hasResearchReview = /(先行研究|既存研究|レビュー|理論|概念|定義)/.test(fullText);
-  const hasSurveyOrInterview = /(調査|アンケート|インタビュー|質問紙|分析)/.test(fullText);
+  const hasResearchReview = /(先行研究|既存研究|既往研究|関連研究|レビュー|理論|概念|定義)/.test(fullText);
+  const hasSurveyOrInterview = /(調査|アンケート|インタビュー|質問紙|実験|観察|フィールドワーク|内容分析|ケーススタディ)/.test(fullText);
   const hasDesignDetails =
     /(調査対象|対象者|調査日|調査期間|選定理由|質問項目|分析方法|分析ソフト|使用ソフト|ソフト名|バージョン|サンプル|回答者|手続き|有効回答|回収|尺度|因子分析|回帰分析|相関分析|共分散|SPSS|Excel|R|Python|AMOS|KH Coder|jamovi|SmartPLS)/i.test(
       fullText,
     );
-  const hasResultSection = /(結果|分析結果)/.test(fullText);
-  const hasDiscussionLanguage = /(考察|示唆|解釈|要因|理由|比較|明らかになった|と考えられる)/.test(
+  const hasResultSection = /(結果|分析結果|調査結果|検証結果)/.test(fullText);
+  const hasDiscussionLanguage = /(考察|示唆|解釈|要因|理由|比較|明らかになった|と考えられる|総合的検討|結論|まとめ)/.test(
     fullText,
   );
   const hasFigureOrTableMention = /(?:図|表)\s*[0-9０-９]+/.test(fullText);
@@ -440,7 +457,7 @@ function checkCompletionReadiness(document, sectionMap) {
         category: "研究内容・妥当性",
         severity: "info",
         location: "文書全体",
-        title: "箇条書きのまま残っていないか確認",
+        title: "箇条書きの使い方を確認",
         original: `箇条書きのような段落を${bulletLikeParagraphs.length}件検出しました。`,
         suggestion:
           "方法、結果、考察の本文では、必要に応じて箇条書きを文章に直し、前後の説明を補ってください。チェックリストや質問項目として必要な箇条書きは残してかまいません。",
@@ -450,12 +467,20 @@ function checkCompletionReadiness(document, sectionMap) {
     );
   }
 
+  const usesReflexiveMethod = /(オートエスノグラフィ|自己民族誌|当事者研究|ナラティブ研究|参与観察)/.test(
+    fullText,
+  );
   for (const paragraph of bodyParagraphs) {
-    if (/(自分の経験|私の経験|個人的な経験|体験談|私自身|自分自身)/.test(paragraph.text)) {
+    if (
+      !usesReflexiveMethod &&
+      /(自分の経験|私の経験|個人的な経験|体験談|私自身|自分自身)/.test(
+        withoutQuotes(paragraph.text),
+      )
+    ) {
       findings.push(
         result({
           category: "研究内容・妥当性",
-          severity: "warning",
+          severity: "info",
           location: paragraphLocation(paragraph, sectionMap),
           title: "個人的経験が根拠になっていないか確認",
           original: paragraph.text,
@@ -538,7 +563,10 @@ function missingNumberFindings(fullText, kind) {
 
 function checkFigures(document) {
   const findings = [];
-  const fullText = document.paragraphs.map((paragraph) => paragraph.text).join("\n");
+  const fullText = [
+    ...document.paragraphs.map((paragraph) => paragraph.text),
+    ...document.tables.map((table) => table.text),
+  ].join("\n");
   const tableMentions = fullText.match(/表\s*[0-9０-９]+/g) ?? [];
   const figureMentions = fullText.match(/図\s*[0-9０-９]+/g) ?? [];
   if (document.tables.length > 0 && tableMentions.length === 0) {
@@ -588,7 +616,10 @@ function checkCitations(document) {
   }
 
   for (const reference of document.references) {
-    const hasYear = /(?:19|20)\d{2}|n\.d\./i.test(reference.text);
+    const hasYear =
+      /(?:19|20)\d{2}|n\.d\.|(?:明治|大正|昭和|平成|令和)\s*\d+年?|in press|forthcoming|印刷中|刊行予定/i.test(
+        reference.text,
+      );
     if (!hasYear) {
       findings.push(
         result({

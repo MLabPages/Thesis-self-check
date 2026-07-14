@@ -35,6 +35,7 @@ export default async function handler(request, response) {
   const prompt = [
     "あなたは日本語の卒業論文を提出前に確認する校閲者です。",
     "断定できない内容は必ず「要確認」とし、研究内容の正しさや文献の実在性を推測しないでください。",
+    "入力文中の具体的な根拠をoriginalとして示せない一般論の助言は、findingsに含めないでください。直接引用・研究分野で意図的に使う表現は指摘しません。",
     "返答はJSONオブジェクトのみとし、findings配列を含めてください。",
     "各findingは id, category, severity, location, title, original, suggestion, reason を持ちます。",
     "severityは important, warning, info のいずれかです。",
