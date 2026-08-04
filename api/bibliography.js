@@ -1,7 +1,21 @@
-import { checkOrigin, isRateLimited } from "./_lib/guard.js";
+import { checkOrigin, isGloballyRateLimited, isRateLimited } from "./_lib/guard.js";
 
 // 書誌照合は1文献ごとに呼ばれるため、レビューAPIより高い上限にする
 const REQUESTS_PER_MINUTE = 120;
+// インスタンス全体の上限。外部データベースへの過剰なアクセスを防ぐ
+const GLOBAL_REQUESTS_PER_MINUTE = Number(process.env.BIBLIOGRAPHY_GLOBAL_LIMIT ?? 300);
+
+// 外部データベースが返すURLをそのままリンク先にしないよう、
+// 通常のWebページを指す形式だけを通す
+function safeHttpUrl(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
 
 function normalize(value) {
   return String(value ?? "")
@@ -290,7 +304,7 @@ function crossrefMatch(item, reference, fields, confidenceOverride = null) {
     journal: decodeHtmlEntities(item["container-title"]?.[0] ?? ""),
     year: yearCandidates[0] ?? null,
     yearCandidates,
-    url: item.URL ?? null,
+    url: safeHttpUrl(item.URL),
   };
   return {
     ...match,
@@ -328,7 +342,7 @@ function ciniiMatch(item, reference, fields) {
     authors: decodeHtmlEntities(orderedCreators.join(", ")),
     journal: decodeHtmlEntities(item["prism:publicationName"] ?? ""),
     year: String(publicationDate).match(/(?:19|20)\d{2}/)?.[0] ?? null,
-    url: item.link?.["@id"] ?? item["@id"] ?? null,
+    url: safeHttpUrl(item.link?.["@id"] ?? item["@id"]),
   };
   return {
     ...match,
@@ -407,6 +421,9 @@ export default async function handler(request, response) {
     return response.status(403).json({ error: "Forbidden" });
   }
   if (isRateLimited(request, REQUESTS_PER_MINUTE)) {
+    return response.status(429).json({ error: "Too many requests" });
+  }
+  if (isGloballyRateLimited(GLOBAL_REQUESTS_PER_MINUTE)) {
     return response.status(429).json({ error: "Too many requests" });
   }
 

@@ -37,14 +37,33 @@ export function findSensitiveText(document) {
 }
 
 export function maskSensitiveText(text) {
-  return PATTERNS.reduce(
-    (masked, pattern) =>
-      masked.replace(pattern.regex, (value, offset) => {
-        const match = Object.assign([value], { index: offset });
-        return isValidMatch(masked, pattern, match) ? `[${pattern.type}]` : value;
-      }),
-    text,
-  );
+  // 置換の判定は必ず元の文章に対して行う。途中結果を見てしまうと、
+  // 先に置換されたパターンの影響で「学籍番号」等の手がかりが消え、
+  // パターンの順序によって結果が変わってしまう
+  const source = String(text ?? "");
+  const replacements = [];
+  for (const pattern of PATTERNS) {
+    for (const match of source.matchAll(pattern.regex)) {
+      if (!isValidMatch(source, pattern, match)) continue;
+      replacements.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        label: `[${pattern.type}]`,
+      });
+    }
+  }
+  if (!replacements.length) return source;
+
+  replacements.sort((left, right) => left.start - right.start || right.end - left.end);
+  let result = "";
+  let cursor = 0;
+  for (const replacement of replacements) {
+    // 範囲が重なる場合は先に採用したものを優先する
+    if (replacement.start < cursor) continue;
+    result += source.slice(cursor, replacement.start) + replacement.label;
+    cursor = replacement.end;
+  }
+  return result + source.slice(cursor);
 }
 
 export function prepareAiPayload(document, selectedChecks) {

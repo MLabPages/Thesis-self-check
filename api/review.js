@@ -1,7 +1,9 @@
-import { checkOrigin, isRateLimited } from "./_lib/guard.js";
+import { checkOrigin, isGloballyRateLimited, isRateLimited } from "./_lib/guard.js";
 
 const MAX_PAYLOAD_CHARS = 120_000;
 const REQUESTS_PER_MINUTE = 6;
+// インスタンス全体の上限。利用者単位の制限をすり抜けても費用が跳ね上がらないようにする
+const GLOBAL_REQUESTS_PER_MINUTE = Number(process.env.AI_REVIEW_GLOBAL_LIMIT ?? 30);
 
 function responseJson(response) {
   for (const item of response.output ?? []) {
@@ -21,6 +23,9 @@ export default async function handler(request, response) {
     return response.status(403).json({ error: "Forbidden" });
   }
   if (isRateLimited(request, REQUESTS_PER_MINUTE)) {
+    return response.status(429).json({ error: "Too many requests" });
+  }
+  if (isGloballyRateLimited(GLOBAL_REQUESTS_PER_MINUTE)) {
     return response.status(429).json({ error: "Too many requests" });
   }
   if (process.env.AI_REVIEW_ENABLED !== "true") {

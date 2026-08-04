@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 
-import { checkOrigin } from "./api/_lib/guard.js";
+import { checkOrigin, clientIdentity, isRateLimited } from "./api/_lib/guard.js";
 import reviewHandler from "./api/review.js";
 import { isDocumentTitleStyle, isReferenceEndParagraph } from "./src/lib/docxParser.js";
 import { runLocalChecks } from "./src/lib/localChecks.js";
-import { findSensitiveText, prepareAiPayload } from "./src/lib/privacy.js";
+import { findSensitiveText, maskSensitiveText, prepareAiPayload } from "./src/lib/privacy.js";
 
 function makeDocument(texts, overrides = {}) {
   const paragraphs = texts.map((text, index) => ({
@@ -48,15 +48,54 @@ assert.equal(
   true,
   "許可URL内のRefererを許可する",
 );
+assert.equal(
+  checkOrigin({ headers: {} }),
+  false,
+  "OriginもRefererもないリクエストは許可URL設定時に拒否する",
+);
 if (previousAllowedOrigin === undefined) delete process.env.ALLOWED_ORIGIN;
 else process.env.ALLOWED_ORIGIN = previousAllowedOrigin;
 
+const previousUnsetOrigin = process.env.ALLOWED_ORIGIN;
+delete process.env.ALLOWED_ORIGIN;
+assert.equal(
+  checkOrigin({ headers: { origin: "https://example.com", host: "example.com" } }),
+  false,
+  "許可URL未設定ではリクエストを拒否する",
+);
+if (previousUnsetOrigin === undefined) delete process.env.ALLOWED_ORIGIN;
+else process.env.ALLOWED_ORIGIN = previousUnsetOrigin;
+
+assert.equal(
+  clientIdentity({ headers: { "x-vercel-forwarded-for": "203.0.113.9" } }),
+  "203.0.113.9",
+  "Vercel Edgeが付与するアドレスを利用者の識別子にする",
+);
+
+const limitRequest = { headers: { "x-vercel-forwarded-for": "198.51.100.7" } };
+for (let attempt = 0; attempt < 3; attempt += 1) {
+  assert.equal(isRateLimited(limitRequest, 3), false, "上限内の呼び出しは通す");
+}
+assert.equal(isRateLimited(limitRequest, 3), true, "上限を超えた呼び出しを止める");
+assert.equal(
+  isRateLimited({ headers: { "x-forwarded-for": "1.2.3.4", "x-vercel-forwarded-for": "198.51.100.7" } }, 3),
+  true,
+  "任意のX-Forwarded-Forを変えても同じ利用者として制限する",
+);
+
 const previousAiEnabled = process.env.AI_REVIEW_ENABLED;
+const previousReviewOrigin = process.env.ALLOWED_ORIGIN;
 delete process.env.AI_REVIEW_ENABLED;
+process.env.ALLOWED_ORIGIN = "https://example.com";
 let reviewStatus = null;
 let reviewBody = null;
 await reviewHandler(
-  { method: "POST", headers: {}, body: {}, socket: { remoteAddress: "test-review-disabled" } },
+  {
+    method: "POST",
+    headers: { origin: "https://example.com", host: "example.com" },
+    body: {},
+    socket: { remoteAddress: "test-review-disabled" },
+  },
   {
     status(code) {
       reviewStatus = code;
@@ -73,6 +112,8 @@ assert.equal(reviewStatus, 503, "AIレビューAPIは既定で無効にする");
 assert.equal(reviewBody?.error, "AI review is disabled");
 if (previousAiEnabled === undefined) delete process.env.AI_REVIEW_ENABLED;
 else process.env.AI_REVIEW_ENABLED = previousAiEnabled;
+if (previousReviewOrigin === undefined) delete process.env.ALLOWED_ORIGIN;
+else process.env.ALLOWED_ORIGIN = previousReviewOrigin;
 
 assert.equal(isDocumentTitleStyle("ChapterTitle", "Chapter Title"), false);
 assert.equal(isDocumentTitleStyle("Title", "Title"), true);
@@ -88,6 +129,19 @@ assert.equal(prepareAiPayload(dateDocument, ["writing"]).sections[0].paragraphs[
 const studentDocument = makeDocument(["学籍番号 20250101"]);
 assert.equal(findSensitiveText(studentDocument)[0]?.type, "学籍番号候補");
 assert.match(prepareAiPayload(studentDocument, ["writing"]).sections[0].paragraphs[0].text, /学籍番号候補/);
+
+const orderedMasking = maskSensitiveText("連絡先 user@example.com 学籍番号 20250101");
+assert.match(orderedMasking, /メールアドレス/, "メールアドレスを隠す");
+assert.match(
+  orderedMasking,
+  /学籍番号候補/,
+  "先に別のパターンを置換しても学籍番号の判定が変わらない",
+);
+assert.equal(
+  maskSensitiveText("調査日は 20250101 である。").includes("20250101"),
+  true,
+  "手がかりのない数値は日付として残す",
+);
 
 const quoteDocument = makeDocument(["参加者は「重要だと思う」と回答した。"]);
 assert.equal(

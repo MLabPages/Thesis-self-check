@@ -45,14 +45,21 @@ AI_REVIEW_ENABLED=true
 VITE_AI_REVIEW_ENABLED=true
 CROSSREF_MAILTO=管理者のメールアドレス
 CINII_APP_ID=CiNiiのAPI利用登録で取得したID
-ALLOWED_ORIGIN=https://公開サイトのURL（API保護用・推奨）
+ALLOWED_ORIGIN=https://公開サイトのURL（API保護用・公開時は必ず設定）
+AI_REVIEW_GLOBAL_LIMIT=30
+BIBLIOGRAPHY_GLOBAL_LIMIT=300
 ```
 
 `/api/review` と `/api/bibliography` には、Origin確認と1分あたりの簡易レート制限
-（レビュー6回・書誌照合60回）が入っています。`ALLOWED_ORIGIN` を設定すると、
-指定したサイト以外からのブラウザ経由の呼び出しを拒否します。レート制限は
+（レビュー6回・書誌照合120回）が入っています。`Origin` も `Referer` も付かない
+リクエストは拒否します。ブラウザからの呼び出しでは必ずどちらかが付くため、
+実質的にcurl等の直接呼び出しだけを止める形です。`ALLOWED_ORIGIN` を設定すると、
+指定したサイト以外からの呼び出しを拒否します。公開する場合は必ず設定してください。
+
+利用者ごとの制限に加えて、インスタンス全体の1分あたり呼び出し回数にも上限を設けて
+います（`AI_REVIEW_GLOBAL_LIMIT`・`BIBLIOGRAPHY_GLOBAL_LIMIT`）。ただしレート制限は
 サーバーレスインスタンスのメモリ上で数えるため、完全な防御ではありません。
-利用が広がる場合はVercelのFirewall等の併用を検討してください。
+利用が広がる場合はVercelのFirewall併用と、OpenAI側の利用上限設定を推奨します。
 
 APIキーはフロントエンドやGitHubへ記載しないでください。`/api/review` は
 元のWordファイルではなく、メールアドレス・電話番号・学籍番号候補をマスクした
