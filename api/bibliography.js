@@ -4,6 +4,10 @@ import { checkOrigin, isGloballyRateLimited, isRateLimited } from "./_lib/guard.
 const REQUESTS_PER_MINUTE = 120;
 // インスタンス全体の上限。外部データベースへの過剰なアクセスを防ぐ
 const GLOBAL_REQUESTS_PER_MINUTE = Number(process.env.BIBLIOGRAPHY_GLOBAL_LIMIT ?? 300);
+const LOOKUP_CACHE_TTL_MS = 10 * 60_000;
+const LOOKUP_CACHE_MAX_ENTRIES = 500;
+const UPSTREAM_TIMEOUT_MS = 8_000;
+const lookupCache = new Map();
 
 // 外部データベースが返すURLをそのままリンク先にしないよう、
 // 通常のWebページを指す形式だけを通す
@@ -15,6 +19,23 @@ function safeHttpUrl(value) {
   } catch {
     return null;
   }
+}
+
+function fetchWithTimeout(url, options = {}) {
+  return fetch(url, { ...options, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+}
+
+function cachedLookup(key, load) {
+  const now = Date.now();
+  const cached = lookupCache.get(key);
+  if (cached && now - cached.createdAt < LOOKUP_CACHE_TTL_MS) return cached.value;
+
+  const value = load();
+  lookupCache.set(key, { createdAt: now, value });
+  if (lookupCache.size > LOOKUP_CACHE_MAX_ENTRIES) {
+    lookupCache.delete(lookupCache.keys().next().value);
+  }
+  return value;
 }
 
 function normalize(value) {
@@ -352,7 +373,7 @@ function ciniiMatch(item, reference, fields) {
 
 async function searchCrossref(reference, fields, headers) {
   if (fields.doi) {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `https://api.crossref.org/works/${encodeURIComponent(fields.doi)}`,
       { headers },
     );
@@ -363,7 +384,7 @@ async function searchCrossref(reference, fields, headers) {
   }
 
   const matches = [];
-  for (const query of queryVariants(fields.title || reference).slice(0, 3)) {
+  for (const query of queryVariants(fields.title || reference).slice(0, 2)) {
     const url = new URL("https://api.crossref.org/works");
     url.searchParams.set("query.bibliographic", query);
     url.searchParams.set("rows", "5");
@@ -374,21 +395,19 @@ async function searchCrossref(reference, fields, headers) {
     if (process.env.CROSSREF_MAILTO) {
       url.searchParams.set("mailto", process.env.CROSSREF_MAILTO);
     }
-    const response = await fetch(url, { headers });
+    const response = await fetchWithTimeout(url, { headers });
     if (!response.ok) continue;
     const data = await response.json();
-    matches.push(
-      ...(data.message?.items ?? []).map((item) =>
-        crossrefMatch(item, reference, fields),
-      ),
-    );
+    const batch = (data.message?.items ?? []).map((item) => crossrefMatch(item, reference, fields));
+    matches.push(...batch);
+    if (batch.some((match) => isReliableMatch(reference, fields, match))) break;
   }
   return matches;
 }
 
 async function searchCinii(reference, fields) {
   const matches = [];
-  const queries = queryVariants(fields.title || reference).slice(0, 3);
+  const queries = queryVariants(fields.title || reference).slice(0, 2);
   for (const [index, query] of queries.entries()) {
     if (index > 0) await wait(650);
     // 書籍は論文検索に載らないため、書籍らしい文献は横断検索（all）を使う
@@ -402,7 +421,7 @@ async function searchCinii(reference, fields) {
     if (process.env.CINII_APP_ID) {
       url.searchParams.set("appid", process.env.CINII_APP_ID);
     }
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) continue;
     const data = await response.json();
     const batch = (data.items ?? []).map((item) => ciniiMatch(item, reference, fields));
@@ -438,13 +457,15 @@ export default async function handler(request, response) {
       ? `ThesisSelfCheck/1.0 (mailto:${process.env.CROSSREF_MAILTO})`
       : "ThesisSelfCheck/1.0",
   };
-  const results = await Promise.allSettled([
-    searchCrossref(reference, fields, headers),
-    searchCinii(reference, fields),
-  ]);
-  const matches = results
-    .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
-    .sort((left, right) => right.confidence - left.confidence);
+  const matches = await cachedLookup(normalize(reference), async () => {
+    const results = await Promise.allSettled([
+      searchCrossref(reference, fields, headers),
+      searchCinii(reference, fields),
+    ]);
+    return results
+      .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
+      .sort((left, right) => right.confidence - left.confidence);
+  });
   const bestMatch = matches.find((match) => isReliableMatch(reference, fields, match)) ?? null;
   const manualLinks = {
     doi: fields.doi ? `https://doi.org/${encodeURI(fields.doi)}` : null,
