@@ -70,10 +70,11 @@ const CHECKS = [
     id: "citations",
     label: "引用・参考文献",
     short: "引用",
-    description: "参考文献一覧・発行年の有無と外部データベースの書誌情報を照合",
+    description: "参考文献一覧・発行年の有無と、書誌情報・Web原典を照合",
     details: [
       "参考文献一覧の認識、発行年の記載候補",
       "Crossref・CiNii Researchとの書誌情報照合（外部送信あり）",
+      "URL付きWeb資料・PDFの題名、発行元、年を原典と比較（n.d.対応）",
       "一致を確認できなくても、文献が存在しないとは判定しません",
       "本文の引用と一覧の対応・引用形式・閲覧日は本人が確認",
     ],
@@ -199,7 +200,7 @@ function ResultGuidance({ findings, pending, incomplete }) {
         </span>
       </div>
       <div>
-        <h3>{pending ? "基本結果を表示しています" : incomplete ? "照合済みの範囲の結果を表示しています" : findings.length === 0 ? "選択したチェックでは指摘がありません" : "一度に全部直さなくて大丈夫です"}</h3>
+        <h3>{pending ? "基本結果を表示しています" : incomplete ? "照合済みの範囲の結果を表示しています" : findings.length === 0 ? "選択したチェックでは指摘がありません" : actionable.length === 0 ? "補足情報・照合結果を確認してください" : "一度に全部直さなくて大丈夫です"}</h3>
         <p>
           {findings.length === 0
             ? (pending ? "基本チェックでは指摘がありません。追加チェックの完了まで、結果は更新されます。" : "自動検出できる範囲での結果です。未選択の分類や、ページ番号・引用の対応・研究内容などは自分で確認してください。")
@@ -342,7 +343,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
             <div className="ai-note">
               <ShieldCheck size={20} />
               <p>
-                基本チェックは端末内で実行します。「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、資料の種類に応じてCrossref・CiNii Researchへ照会します。元のWordファイルは送信しません。
+                基本チェックは端末内で実行します。「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信します。論文・書籍はCrossref・CiNii Researchへ照会し、URL付きWeb資料・PDFは記載URLへ接続して原典の情報を取得します。原典サイトへ参考文献の記載全体は送信しません。元のWordファイルは送信しません。
               </p>
             </div>
           </aside>
@@ -364,7 +365,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                 <article className={`finding-card severity-${finding.severity}`} key={finding.id}>
                   <div className="finding-meta">
                     <span>{finding.category}</span>
-                    <span className="severity-label">{{ important: "優先確認", warning: "修正候補", info: "補足情報" }[finding.severity] ?? "補足情報"}</span>
+                    <span className="severity-label">{finding.bibliography?.status === "source_verified" ? "照合済み" : { important: "優先確認", warning: "修正候補", info: "補足情報" }[finding.severity] ?? "補足情報"}</span>
                     <b>{finding.location}</b>
                   </div>
                   <h4>{finding.title}</h4>
@@ -384,6 +385,19 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                       <p>{finding.suggestion}</p>
                     </div>
                   </div>
+                  {finding.bibliography?.comparisons && (
+                    <div className="source-comparisons" aria-label="原典との書誌情報比較">
+                      {finding.bibliography.comparisons.map((row) => (
+                        <div className={`source-comparison state-${row.state}`} key={row.field}>
+                          <div className="source-comparison-heading"><b>{row.field}</b><span>{{ match: "一致", different: "差異あり", unknown: "要確認" }[row.state]}</span></div>
+                          <dl>
+                            <div><dt>参考文献の記載</dt><dd>{row.provided}</dd></div>
+                            <div><dt>原典から取得</dt><dd>{row.source}{row.evidence && <small>根拠：{row.evidence}</small>}</dd></div>
+                          </dl>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <p className="finding-reason">
                     <Info size={16} />
                     {finding.reason}
@@ -392,7 +406,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                     <div className="bibliography-links">
                       {finding.bibliography.links.source && (
                         <a href={finding.bibliography.links.source} target="_blank" rel="noreferrer">
-                          {finding.bibliography.status === "manual_source" ? "原典を開く" : "原典候補"}
+                          {finding.bibliography.status === "manual_source" || finding.bibliography.status?.startsWith("source_") ? "原典を開く" : "原典候補"}
                           <ArrowRight size={15} />
                         </a>
                       )}
@@ -829,7 +843,7 @@ export function App() {
             <ShieldCheck size={20} />
             <p><strong>データの処理について</strong><br />
               基本チェックは端末内で実行し、元のWordファイルは送信しません。
-              「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、資料の種類に応じてCrossref・CiNii Researchへ照会します。本文は書誌照合のために送信しません。
+              「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信します。論文・書籍はCrossref・CiNii Researchへ照会し、URL付きWeb資料・PDFは記載URLへ接続して原典の情報を取得します。原典サイトへ参考文献の記載全体は送信しません。本文は書誌照合のために送信しません。
             </p>
           </div>
 

@@ -3,19 +3,25 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "engines": { "node": "24.x" },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "verify:rules": "node verify-rules.mjs",
-    "verify:bibliography": "node verify-bibliography.mjs"
+    "verify:bibliography": "node verify-bibliography.mjs",
+    "verify:sources": "node verify-sources.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
     "@vitejs/plugin-react": "5.0.4",
+    "cheerio": "^1.2.0",
+    "ipaddr.js": "^2.5.0",
     "jszip": "^3.10.1",
+    "pdfjs-dist": "^6.3.289",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "undici": "^8.11.2",
     "vite": "6.4.2"
   },
   "devDependencies": {

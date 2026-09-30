@@ -12,6 +12,46 @@ function bibliographyFinding(reference, result) {
 
   if (result.status === "verified") return null;
 
+  if (result.status?.startsWith("source_")) {
+    const sourceName = result.referenceType === "report" ? "報告書・PDF" : "Web資料";
+    const titles = {
+      source_verified: `${sourceName}の書誌情報が一致しました`,
+      source_partial: `${sourceName}の書誌情報を一部確認しました`,
+      source_mismatch: `${sourceName}の書誌情報に差異があります`,
+      source_unavailable: `${sourceName}の原典を自動取得できませんでした`,
+    };
+    const errors = {
+      blocked_url: "自動取得できる公開URLの条件を満たしていません。",
+      timeout: "原典の取得に時間がかかり、通信を終了しました。",
+      too_large: "自動取得のサイズ上限を超えています。",
+      unsupported_format: "HTML・PDFとして読み取れない形式でした。",
+      redirect_failed: "転送先の取得を完了できませんでした。",
+      parse_failed: "資料の文字情報を読み取れませんでした。",
+      access_restricted: "原典サイトの自動取得制限により、ページ情報を確認できませんでした。",
+      http_404: "記載されたURLではページが見つかりませんでした（404）。",
+      http_403: "原典サイトが自動取得を拒否しました（403）。",
+      http_401: "原典サイトの認証が必要です（401）。",
+    };
+    const yearUnknown = result.comparisons?.some((row) => /年$/.test(row.field) && row.state === "unknown") && !result.metadata?.year;
+    const dateAdvice = yearUnknown
+      ? "公開・発行年は取得できませんでした。原典に年の記載がない場合は n.d. とし、閲覧日は別に記載してください。著作権年や閲覧年を公開年に置き換えないでください。"
+      : result.dateState === "missing" ? "原典の公開／発行年の記載を参考文献に反映してください。閲覧日は別に記載してください。" : "閲覧日と引用形式は、提出先の指定に合わせて確認してください。";
+    return {
+      id: crypto.randomUUID(), category: "引用・参考文献", location,
+      severity: result.status === "source_mismatch" ? "warning" : "info",
+      title: titles[result.status], original: reference.text,
+      suggestion: result.status === "source_unavailable"
+        ? "「原典を開く」から、題名・作成者（団体）・公開／発行年を確認してください。"
+        : result.status === "source_mismatch"
+          ? `下の比較で「差異あり」の項目を原典で確認してください。${dateAdvice}`
+          : result.status === "source_verified" ? `題名・作成者／発行元・公開／発行年の3項目を原典と照合しました。${dateAdvice}` : `取得できた項目を下に表示しています。「要確認」の項目を原典で確認してください。${dateAdvice}`,
+      reason: result.status === "source_unavailable"
+        ? `${errors[result.sourceError] ?? "原典への接続または読み取りを完了できませんでした。"}資料が存在しないという判定ではありません。`
+        : `記載URLの原典から取得した情報との比較です。内容の正しさや引用の妥当性は判定していません。${(result.metadata?.notes ?? []).join(" ")}`,
+      bibliography: result,
+    };
+  }
+
   if (result.status === "manual_source") {
     const isReport = result.referenceType === "report";
     return {
@@ -142,7 +182,7 @@ export async function verifyBibliography(references, { onProgress, onFinding, si
         title: "書誌照合は公開環境で実行されます",
         original: `${references.length}件の参考文献を読み取りました。`,
         suggestion:
-          "Vercel公開版ではCrossrefとCiNii Researchで照合し、差異がある項目だけを表示します。",
+          "Vercel公開版では論文をCrossref・CiNii Researchで照合し、URL付きWeb資料・PDFは原典から取得した情報を比較します。",
         reason:
           "通常のローカル開発サーバーには書誌照合APIがないため、ここではまとめて案内しています。",
       },

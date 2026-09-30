@@ -1,4 +1,7 @@
 import { checkOrigin, isGloballyRateLimited, isRateLimited } from "./_lib/guard.js";
+import { referenceDate } from "../src/lib/referenceDate.js";
+import { fetchSource } from "./_lib/sourceFetch.js";
+import { compareSourceMetadata, extractHtmlMetadata, extractPdfMetadata } from "./_lib/sourceMetadata.js";
 
 // 書誌照合は1文献ごとに呼ばれるため、レビューAPIより高い上限にする
 const REQUESTS_PER_MINUTE = 120;
@@ -171,8 +174,11 @@ function extractSourceUrl(reference) {
   return safeHttpUrl(raw.replace(/[,.;、。]+$/, ""));
 }
 
-function extractReferenceFields(reference) {
-  const year = reference.match(/(?:19|20)\d{2}/)?.[0] ?? null;
+export function extractReferenceFields(reference) {
+  const sourceUrl = extractSourceUrl(reference);
+  reference = reference.normalize("NFKC");
+  const date = referenceDate(reference);
+  const { year, dateState } = date;
   const doi =
     reference
       .match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i)?.[0]
@@ -186,10 +192,10 @@ function extractReferenceFields(reference) {
     bookTitle ??
     reference.match(/[“"]([^”"]{5,})[”"]/)?.[1] ??
     null;
-  const afterYear = year
+  const afterYear = date.end >= 0
     ? reference
-        .slice(reference.search(new RegExp(`\\(?${year}\\)?`)))
-        .replace(new RegExp(`^\\(?${year}\\)?[).．。\\s]*`), "")
+        .slice(date.end)
+        .replace(/^[).．。\s,]+/, "")
         .replace(/https?:\/\/\S+/g, "")
         .trim()
     : "";
@@ -215,15 +221,14 @@ function extractReferenceFields(reference) {
   const journal = isBook
     ? null
     : reference.match(/『([^』]{2,})』/)?.[1] ?? englishJournal;
-  const authorArea = reference.split(/(?:19|20)\d{2}/)[0] ?? "";
-  const sourceUrl = extractSourceUrl(reference);
+  const authorArea = date.start >= 0 ? reference.slice(0, date.start) : reference.split(/[「『“"]|https?:\/\//i)[0];
   const academicUrl = sourceUrl && ["doi.org", "dx.doi.org", "cir.nii.ac.jp", "jstage.jst.go.jp", "www.jstage.jst.go.jp", "hdl.handle.net", "pubmed.ncbi.nlm.nih.gov"].includes(new URL(sourceUrl).hostname);
   const webCue = /(?:HP|ホームページ|ウェブサイト|閲覧|確認|アクセス|retrieved|accessed|website)/i.test(reference);
   const isWebSource = Boolean(sourceUrl && !doi && !hasVolumeOrPages && !hasArticleNumber && !academicUrl && !isJapaneseBook && (webCue || (!journal && !isBook)));
   const referenceType = isWebSource
     ? (/\.pdf(?:[?#]|$)/i.test(sourceUrl) || /報告書|白書|調査報告|レポート/.test(reference) ? "report" : "web")
     : isBook ? "book" : "article";
-  return { year, doi, title, journal, authorArea, isJapaneseBook, isBook, referenceType, sourceUrl };
+  return { year, dateState, doi, title, journal, authorArea, isJapaneseBook, isBook, referenceType, sourceUrl };
 }
 
 function scoreMatch(reference, fields, match) {
@@ -510,15 +515,28 @@ export default async function handler(request, response) {
 
   const fields = extractReferenceFields(reference);
   if (fields.referenceType === "web" || fields.referenceType === "report") {
-    return response.status(200).json({
-      status: "manual_source",
-      referenceType: fields.referenceType,
-      bestMatch: null,
-      differences: [],
-      checkedFields: [],
-      providers: [],
-      links: { source: fields.sourceUrl },
-    });
+    try {
+      // URLの大文字・小文字やクエリを保持し、別ページの結果を混同しない。
+      const source = await cachedLookup(`source:${reference}`, async () => {
+        const fetched = await fetchSource(fields.sourceUrl);
+        const metadata = fetched.format === "pdf"
+          ? await extractPdfMetadata(fetched.bytes)
+          : extractHtmlMetadata(fetched.bytes, fetched.contentType, fetched.url);
+        return { ...compareSourceMetadata(fields, metadata), metadata, sourceUrl: fetched.url };
+      });
+      return response.status(200).json({
+        ...source,
+        referenceType: source.metadata.format === "pdf" ? "report" : fields.referenceType,
+        bestMatch: null, providers: [], dateState: fields.dateState,
+        links: { source: fields.sourceUrl },
+      });
+    } catch (error) {
+      return response.status(200).json({
+        status: "source_unavailable", sourceError: error.code ?? "parse_failed",
+        referenceType: fields.referenceType, bestMatch: null, differences: [],
+        checkedFields: [], providers: [], links: { source: fields.sourceUrl },
+      });
+    }
   }
   const headers = {
     "User-Agent": process.env.CROSSREF_MAILTO
