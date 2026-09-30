@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import { checkOrigin, clientIdentity, isRateLimited } from "./api/_lib/guard.js";
 import reviewHandler from "./api/review.js";
+import bibliographyHandler from "./api/bibliography.js";
 import { isDocumentTitleStyle, isReferenceEndParagraph } from "./src/lib/docxParser.js";
 import { runLocalChecks } from "./src/lib/localChecks.js";
 import { findSensitiveText, maskSensitiveText, prepareAiPayload } from "./src/lib/privacy.js";
@@ -65,6 +66,58 @@ assert.equal(
 );
 if (previousUnsetOrigin === undefined) delete process.env.ALLOWED_ORIGIN;
 else process.env.ALLOWED_ORIGIN = previousUnsetOrigin;
+
+// プレビューの追加許可は、Vercel自身が設定する当該デプロイのURLに限定する。
+const originEnvKeys = ["ALLOWED_ORIGIN", "VERCEL", "VERCEL_ENV", "VERCEL_URL", "VERCEL_BRANCH_URL"];
+const savedOriginEnv = Object.fromEntries(originEnvKeys.map((key) => [key, process.env[key]]));
+try {
+  process.env.ALLOWED_ORIGIN = "https://production.example.com";
+  process.env.VERCEL = "1";
+  process.env.VERCEL_ENV = "preview";
+  process.env.VERCEL_URL = "thesis-deployment-123.vercel.app";
+  process.env.VERCEL_BRANCH_URL = "thesis-git-improvements.vercel.app";
+  const originRequest = (origin) => ({ headers: { origin } });
+  assert.equal(checkOrigin(originRequest("https://thesis-deployment-123.vercel.app")), true);
+  assert.equal(checkOrigin(originRequest("https://thesis-git-improvements.vercel.app")), true);
+  assert.equal(checkOrigin({ headers: { referer: "https://thesis-git-improvements.vercel.app/check" } }), true);
+  assert.equal(checkOrigin(originRequest("https://production.example.com")), true);
+  for (const origin of [
+    "https://another-project.vercel.app",
+    "https://thesis-git-improvements.vercel.app.evil.test",
+    "http://thesis-git-improvements.vercel.app",
+    "https://thesis-git-improvements.vercel.app:444",
+    "null",
+  ]) assert.equal(checkOrigin(originRequest(origin)), false, `別オリジンを拒否: ${origin}`);
+  assert.equal(checkOrigin({ headers: { host: "thesis-git-improvements.vercel.app" } }), false);
+  assert.equal(checkOrigin({ headers: { origin: "https://evil.test", host: "thesis-git-improvements.vercel.app" } }), false);
+
+  let bibliographyStatus;
+  await bibliographyHandler(
+    { method: "POST", headers: { origin: "https://thesis-git-improvements.vercel.app" }, body: {}, socket: { remoteAddress: "preview-origin-test" } },
+    { status(code) { bibliographyStatus = code; return this; }, json() { return this; }, setHeader() {} },
+  );
+  assert.equal(bibliographyStatus, 400, "プレビューからのAPI呼び出しはOrigin制限を通過し、入力検証まで到達する");
+
+  delete process.env.ALLOWED_ORIGIN;
+  assert.equal(checkOrigin(originRequest("https://thesis-git-improvements.vercel.app")), true, "プレビュー自身は本番の許可URL設定なしでも利用可能");
+  process.env.VERCEL_ENV = "production";
+  assert.equal(checkOrigin(originRequest("https://thesis-git-improvements.vercel.app")), false, "本番でプレビューURLを自動許可しない");
+  process.env.ALLOWED_ORIGIN = "https://production.example.com";
+  assert.equal(checkOrigin(originRequest("https://production.example.com")), true);
+  assert.equal(checkOrigin(originRequest("https://thesis-deployment-123.vercel.app")), false);
+  process.env.VERCEL_ENV = "preview";
+  process.env.VERCEL = "0";
+  assert.equal(checkOrigin(originRequest("https://thesis-git-improvements.vercel.app")), false, "Vercel外では自動許可しない");
+  process.env.VERCEL = "1";
+  process.env.VERCEL_BRANCH_URL = "evil.test";
+  process.env.VERCEL_URL = "thesis.vercel.app/path";
+  assert.equal(checkOrigin(originRequest("https://evil.test")), false, "不正な自動URLを拒否する");
+} finally {
+  for (const [key, value] of Object.entries(savedOriginEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
 
 assert.equal(
   clientIdentity({ headers: { "x-vercel-forwarded-for": "203.0.113.9" } }),

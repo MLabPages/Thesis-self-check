@@ -133,6 +133,7 @@ export async function verifyBibliography(references, { onProgress, onFinding, si
       cursor += 1;
       if (index >= references.length) return;
       const reference = references[index];
+      let failureStatus = null;
       const requestController = new AbortController();
       const abortRequest = () => requestController.abort();
       signal?.addEventListener("abort", abortRequest, { once: true });
@@ -152,7 +153,10 @@ export async function verifyBibliography(references, { onProgress, onFinding, si
           stopLookups = true;
           return;
         }
-        if (!response.ok) throw new Error("lookup unavailable");
+        if (!response.ok) {
+          failureStatus = response.status;
+          throw new Error("lookup unavailable");
+        }
         const result = await response.json();
         const finding = bibliographyFinding(reference, result);
         if (finding) addFinding(index, finding);
@@ -163,10 +167,16 @@ export async function verifyBibliography(references, { onProgress, onFinding, si
             category: "引用・参考文献",
             severity: "info",
             location: `参考文献 ${reference.id.replace("ref", "")}`,
-            title: "書誌データベースへ接続できませんでした",
+            title: failureStatus === 403
+              ? "このURLからの書誌照合は許可されていません"
+              : "書誌データベースへ接続できませんでした",
             original: reference.text,
-            suggestion: "公開環境で再実行するか、CiNii Researchで手動確認してください。",
-            reason: "基本チェックは完了していますが、外部書誌照合APIを利用できませんでした。",
+            suggestion: failureStatus === 403
+              ? "管理者に、この公開URLの書誌照合APIの許可設定を確認してもらってください。基本チェックの結果はそのまま利用できます。"
+              : "公開環境で再実行するか、CiNii Researchで手動確認してください。",
+            reason: failureStatus === 403
+              ? "本サービスのAPIがアクセスを拒否しました（403）。文献が存在しない、または書誌データベースが停止しているという判定ではありません。"
+              : "基本チェックは完了していますが、外部書誌照合APIを利用できませんでした。",
         });
       } finally {
         window.clearTimeout(timeout);

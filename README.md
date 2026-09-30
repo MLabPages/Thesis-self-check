@@ -62,6 +62,11 @@ BIBLIOGRAPHY_GLOBAL_LIMIT=300
 実質的にcurl等の直接呼び出しだけを止める形です。`ALLOWED_ORIGIN` を設定すると、
 指定したサイト以外からの呼び出しを拒否します。公開する場合は必ず設定してください。
 
+VercelのPreview環境では、Vercelが設定する`VERCEL_URL`と`VERCEL_BRANCH_URL`の
+HTTPSオリジンも許可します。対象はそのデプロイとブランチ自身の`.vercel.app`ホストだけです。
+Production環境ではこの追加許可は行わず、引き続き`ALLOWED_ORIGIN`が必要です。
+プレビューURLが更新されても、許可URLを手作業で変更する必要はありません。
+
 利用者ごとの制限に加えて、インスタンス全体の1分あたり呼び出し回数にも上限を設けて
 います（`AI_REVIEW_GLOBAL_LIMIT`・`BIBLIOGRAPHY_GLOBAL_LIMIT`）。ただしレート制限は
 サーバーレスインスタンスのメモリ上で数えるため、完全な防御ではありません。

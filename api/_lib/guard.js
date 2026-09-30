@@ -9,15 +9,30 @@ const globalRequests = [];
 
 export function checkOrigin(request) {
   const source = request.headers.origin ?? request.headers.referer ?? "";
-  const allowed = process.env.ALLOWED_ORIGIN;
-  // 公開APIは許可するサイトを明示して初めて稼働させる。未設定時の推測による
-  // 許可は、デプロイ設定の漏れで外部クライアントにAPIを開放してしまうため行わない
-  if (!allowed) return false;
+  const allowedOrigins = new Set();
+  if (process.env.ALLOWED_ORIGIN) {
+    try {
+      allowedOrigins.add(new URL(process.env.ALLOWED_ORIGIN).origin);
+    } catch {
+      // 不正な設定値は許可対象にしない。
+    }
+  }
+  // Vercelが注入した、このプレビュー自身のURLだけを追加する。
+  // Hostなどのリクエストヘッダーや、*.vercel.app全体からは許可URLを作らない。
+  // 本番環境では従来どおりALLOWED_ORIGINの設定が必要。
+  if (process.env.VERCEL === "1" && process.env.VERCEL_ENV === "preview") {
+    for (const hostname of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL]) {
+      if (typeof hostname === "string" && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.vercel\.app$/i.test(hostname)) {
+        allowedOrigins.add(`https://${hostname.toLowerCase()}`);
+      }
+    }
+  }
+  if (allowedOrigins.size === 0) return false;
   // OriginもRefererもないリクエストは拒否する。ブラウザからの通常の呼び出しでは
   // どちらかが必ず付くため、素通りするのはcurl等の直接呼び出しだけになる
   if (!source) return false;
   try {
-    return new URL(source).origin === new URL(allowed).origin;
+    return allowedOrigins.has(new URL(source).origin);
   } catch {
     return false;
   }
