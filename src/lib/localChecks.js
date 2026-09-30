@@ -1,4 +1,5 @@
 import { findSensitiveText } from "./privacy.js";
+import { referenceDate } from "./referenceDate.js";
 
 function result({ category, severity = "warning", location, title, original, suggestion, reason, ranges }) {
   return {
@@ -617,10 +618,9 @@ function checkCitations(document) {
   }
 
   for (const reference of document.references) {
-    const hasYear =
-      /(?:19|20)\d{2}|n\.d\.|(?:明治|大正|昭和|平成|令和)\s*\d+年?|in press|forthcoming|印刷中|刊行予定/i.test(
-        reference.text,
-      );
+    const prefix = reference.text.normalize("NFKC").split(/[「『“"]|https?:\/\//i)[0];
+    const hasYear = referenceDate(reference.text).dateState !== "missing" ||
+      /(?:明治|大正|昭和|平成|令和)\s*\d+年?|in press|forthcoming|印刷中|刊行予定/i.test(prefix);
     if (!hasYear) {
       findings.push(
         result({

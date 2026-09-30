@@ -1,4 +1,7 @@
 import { checkOrigin, isGloballyRateLimited, isRateLimited } from "./_lib/guard.js";
+import { referenceDate } from "../src/lib/referenceDate.js";
+import { fetchSource } from "./_lib/sourceFetch.js";
+import { compareSourceMetadata, extractHtmlMetadata, extractPdfMetadata } from "./_lib/sourceMetadata.js";
 
 // 書誌照合は1文献ごとに呼ばれるため、レビューAPIより高い上限にする
 const REQUESTS_PER_MINUTE = 120;
@@ -30,7 +33,14 @@ function cachedLookup(key, load) {
   const cached = lookupCache.get(key);
   if (cached && now - cached.createdAt < LOOKUP_CACHE_TTL_MS) return cached.value;
 
-  const value = load();
+  const value = Promise.resolve().then(load).then((result) => {
+    // 接続障害を10分間固定せず、再実行時にデータベースへ再照会する。
+    if (result.providerErrors?.length && lookupCache.get(key)?.value === value) lookupCache.delete(key);
+    return result;
+  }, (error) => {
+    if (lookupCache.get(key)?.value === value) lookupCache.delete(key);
+    throw error;
+  });
   lookupCache.set(key, { createdAt: now, value });
   if (lookupCache.size > LOOKUP_CACHE_MAX_ENTRIES) {
     lookupCache.delete(lookupCache.keys().next().value);
@@ -96,8 +106,16 @@ function queryVariants(value) {
   const japaneseOnly =
     source.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー々]+/gu)?.join(" ") ??
     "";
+  const withoutQuotes = source.replace(/[「」『』“”"']/g, "");
+  // CiNiiの検索は題名の括弧や副題の違いで0件になり得る。
+  // 短い検索語で候補を広げても、一致判定には元の題名・著者・年を使う。
+  const japanesePrefix = hasJapanese(source) && withoutQuotes.length > 20
+    ? withoutQuotes.slice(0, 16)
+    : null;
   return compact([
     source,
+    withoutQuotes,
+    japanesePrefix,
     withoutParentheses,
     beforeSubtitle,
     japaneseOnly.length >= 6 ? japaneseOnly : null,
@@ -128,14 +146,45 @@ function authorSimilarity(referenceAuthors, candidateAuthors) {
   return Math.max(similarity(referenceAuthors, candidateAuthors), partScore);
 }
 
-function extractReferenceFields(reference) {
-  const year = reference.match(/(?:19|20)\d{2}/)?.[0] ?? null;
+function quotedText(reference, opening, closing) {
+  const start = reference.indexOf(opening);
+  if (start < 0) return null;
+  let depth = 0;
+  for (let index = start; index < reference.length; index += 1) {
+    if (reference[index] === opening) depth += 1;
+    else if (reference[index] === closing && --depth === 0) {
+      const text = reference.slice(start + 1, index);
+      return text.length >= 3 ? text : null;
+    }
+  }
+  return null;
+}
+
+function extractSourceUrl(reference) {
+  let raw = reference.match(/https?:\/\/[^\s<>"「」『』（）]+/i)?.[0];
+  if (!raw) return null;
+  let depth = 0;
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] === "(") depth += 1;
+    else if (raw[index] === ")") {
+      if (depth === 0) { raw = raw.slice(0, index); break; }
+      depth -= 1;
+    }
+  }
+  return safeHttpUrl(raw.replace(/[,.;、。]+$/, ""));
+}
+
+export function extractReferenceFields(reference) {
+  const sourceUrl = extractSourceUrl(reference);
+  reference = reference.normalize("NFKC");
+  const date = referenceDate(reference);
+  const { year, dateState } = date;
   const doi =
     reference
       .match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i)?.[0]
       ?.replace(/[.,;)\]]+$/, "") ?? null;
-  const quotedTitle = reference.match(/「([^」]{3,})」/)?.[1] ?? null;
-  const bookTitle = reference.match(/『([^』]{3,})』/)?.[1] ?? null;
+  const quotedTitle = quotedText(reference, "「", "」");
+  const bookTitle = quotedText(reference, "『", "』");
   // 「」がなく『』だけの日本語文献は書籍とみなす（『』は書名であり掲載誌名ではない）
   const isJapaneseBook = !quotedTitle && Boolean(bookTitle);
   const japaneseTitle =
@@ -143,10 +192,10 @@ function extractReferenceFields(reference) {
     bookTitle ??
     reference.match(/[“"]([^”"]{5,})[”"]/)?.[1] ??
     null;
-  const afterYear = year
+  const afterYear = date.end >= 0
     ? reference
-        .slice(reference.search(new RegExp(`\\(?${year}\\)?`)))
-        .replace(new RegExp(`^\\(?${year}\\)?[).．。\\s]*`), "")
+        .slice(date.end)
+        .replace(/^[).．。\s,]+/, "")
         .replace(/https?:\/\/\S+/g, "")
         .trim()
     : "";
@@ -162,17 +211,24 @@ function extractReferenceFields(reference) {
   // 英語文献の掲載誌は「Journal, 23(11), 927-959」のように巻号が続くため誌名だけ残す
   const englishJournal = englishParts[1]?.split(/,\s*\d/)[0]?.trim() ?? null;
   // 巻号・ページ表記がない英語文献は書籍とみなす（2番目の要素は出版社名なので掲載誌にしない）
-  const hasVolumeOrPages = /\d+\s*\(\d+\)|\d+\s*[–\-−]\s*\d+/.test(reference);
+  const referenceWithoutUrls = reference.replace(/https?:\/\/[^\s「」『』（）]+/gi, "");
+  const hasVolumeOrPages = /\d+\s*\(\d+\)|\d+\s*[–\-−]\s*\d+/.test(referenceWithoutUrls);
   // 巻号の代わりに記事番号を使う雑誌論文（例: 12, e123456）を書籍扱いしない
-  const hasArticleNumber = /\b\d+\s*,\s*(?:e?\d{4,})\b/i.test(reference);
+  const hasArticleNumber = /\b\d+\s*,\s*(?:e?\d{4,})\b/i.test(referenceWithoutUrls);
   const isEnglishBook =
     !japaneseTitle && !doi && !hasVolumeOrPages && !hasArticleNumber && englishParts.length >= 2;
   const isBook = isJapaneseBook || isEnglishBook;
   const journal = isBook
     ? null
     : reference.match(/『([^』]{2,})』/)?.[1] ?? englishJournal;
-  const authorArea = reference.split(/(?:19|20)\d{2}/)[0] ?? "";
-  return { year, doi, title, journal, authorArea, isJapaneseBook, isBook };
+  const authorArea = date.start >= 0 ? reference.slice(0, date.start) : reference.split(/[「『“"]|https?:\/\//i)[0];
+  const academicUrl = sourceUrl && ["doi.org", "dx.doi.org", "cir.nii.ac.jp", "jstage.jst.go.jp", "www.jstage.jst.go.jp", "hdl.handle.net", "pubmed.ncbi.nlm.nih.gov"].includes(new URL(sourceUrl).hostname);
+  const webCue = /(?:HP|ホームページ|ウェブサイト|閲覧|確認|アクセス|retrieved|accessed|website)/i.test(reference);
+  const isWebSource = Boolean(sourceUrl && !doi && !hasVolumeOrPages && !hasArticleNumber && !academicUrl && !isJapaneseBook && (webCue || (!journal && !isBook)));
+  const referenceType = isWebSource
+    ? (/\.pdf(?:[?#]|$)/i.test(sourceUrl) || /報告書|白書|調査報告|レポート/.test(reference) ? "report" : "web")
+    : isBook ? "book" : "article";
+  return { year, dateState, doi, title, journal, authorArea, isJapaneseBook, isBook, referenceType, sourceUrl };
 }
 
 function scoreMatch(reference, fields, match) {
@@ -210,7 +266,7 @@ function isReliableMatch(reference, fields, match) {
   if (fields.doi) {
     return normalize(fields.doi) === normalize(match.doi);
   }
-  if (!fields.title || scores.titleScore < 0.82) return false;
+  if (!fields.title || (scores.titleScore < 0.82 && !titleMatches(fields.title, match.title))) return false;
   if (fields.authorArea && match.authors && scores.authorScore < 0.48) {
     return false;
   }
@@ -384,6 +440,7 @@ async function searchCrossref(reference, fields, headers) {
   }
 
   const matches = [];
+  let successfulResponses = 0;
   for (const query of queryVariants(fields.title || reference).slice(0, 2)) {
     const url = new URL("https://api.crossref.org/works");
     url.searchParams.set("query.bibliographic", query);
@@ -398,23 +455,26 @@ async function searchCrossref(reference, fields, headers) {
     const response = await fetchWithTimeout(url, { headers });
     if (!response.ok) continue;
     const data = await response.json();
+    successfulResponses += 1;
     const batch = (data.message?.items ?? []).map((item) => crossrefMatch(item, reference, fields));
     matches.push(...batch);
     if (batch.some((match) => isReliableMatch(reference, fields, match))) break;
   }
+  if (!successfulResponses) throw new Error("Crossref lookup unavailable");
   return matches;
 }
 
 async function searchCinii(reference, fields) {
   const matches = [];
-  const queries = queryVariants(fields.title || reference).slice(0, 2);
+  let successfulResponses = 0;
+  const queries = queryVariants(fields.title || reference).slice(0, 3);
   for (const [index, query] of queries.entries()) {
     if (index > 0) await wait(650);
     // 書籍は論文検索に載らないため、書籍らしい文献は横断検索（all）を使う
     const endpoint = fields.isBook ? "all" : "articles";
     const url = new URL(`https://cir.nii.ac.jp/opensearch/${endpoint}`);
     url.searchParams.set("q", query);
-    url.searchParams.set("count", "5");
+    url.searchParams.set("count", "10");
     url.searchParams.set("start", "1");
     url.searchParams.set("lang", "ja");
     url.searchParams.set("format", "json");
@@ -424,10 +484,12 @@ async function searchCinii(reference, fields) {
     const response = await fetchWithTimeout(url);
     if (!response.ok) continue;
     const data = await response.json();
+    successfulResponses += 1;
     const batch = (data.items ?? []).map((item) => ciniiMatch(item, reference, fields));
     matches.push(...batch);
     if (batch.some((match) => isReliableMatch(reference, fields, match))) break;
   }
+  if (!successfulResponses) throw new Error("CiNii lookup unavailable");
   return matches;
 }
 
@@ -452,19 +514,46 @@ export default async function handler(request, response) {
   }
 
   const fields = extractReferenceFields(reference);
+  if (fields.referenceType === "web" || fields.referenceType === "report") {
+    try {
+      // URLの大文字・小文字やクエリを保持し、別ページの結果を混同しない。
+      const source = await cachedLookup(`source:${reference}`, async () => {
+        const fetched = await fetchSource(fields.sourceUrl);
+        const metadata = fetched.format === "pdf"
+          ? await extractPdfMetadata(fetched.bytes)
+          : extractHtmlMetadata(fetched.bytes, fetched.contentType, fetched.url);
+        return { ...compareSourceMetadata(fields, metadata), metadata, sourceUrl: fetched.url };
+      });
+      return response.status(200).json({
+        ...source,
+        referenceType: source.metadata.format === "pdf" ? "report" : fields.referenceType,
+        bestMatch: null, providers: [], dateState: fields.dateState,
+        links: { source: fields.sourceUrl },
+      });
+    } catch (error) {
+      return response.status(200).json({
+        status: "source_unavailable", sourceError: error.code ?? "parse_failed",
+        referenceType: fields.referenceType, bestMatch: null, differences: [],
+        checkedFields: [], providers: [], links: { source: fields.sourceUrl },
+      });
+    }
+  }
   const headers = {
     "User-Agent": process.env.CROSSREF_MAILTO
       ? `ThesisSelfCheck/1.0 (mailto:${process.env.CROSSREF_MAILTO})`
       : "ThesisSelfCheck/1.0",
   };
-  const matches = await cachedLookup(normalize(reference), async () => {
+  const { matches, providerErrors } = await cachedLookup(normalize(reference), async () => {
     const results = await Promise.allSettled([
       searchCrossref(reference, fields, headers),
       searchCinii(reference, fields),
     ]);
-    return results
+    const matches = results
       .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
       .sort((left, right) => right.confidence - left.confidence);
+    const providerErrors = results.flatMap((result, index) => result.status === "rejected"
+      ? [["Crossref", "CiNii Research"][index]] : []);
+    return { matches, providerErrors };
   });
   const bestMatch = matches.find((match) => isReliableMatch(reference, fields, match)) ?? null;
   const manualLinks = {
@@ -475,7 +564,8 @@ export default async function handler(request, response) {
 
   if (!bestMatch || bestMatch.confidence < 0.43) {
     return response.status(200).json({
-      status: fields.doi ? "doi_unconfirmed" : "not_found",
+      status: providerErrors.length ? "lookup_incomplete" : fields.doi ? "doi_unconfirmed" : "not_found",
+      providerErrors,
       bookLike: Boolean(fields.isBook),
       bestMatch: null,
       differences: [],
