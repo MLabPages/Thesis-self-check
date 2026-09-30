@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "verify:rules": "node verify-rules.mjs"
+    "verify:rules": "node verify-rules.mjs",
+    "verify:bibliography": "node verify-bibliography.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

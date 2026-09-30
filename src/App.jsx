@@ -342,7 +342,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
             <div className="ai-note">
               <ShieldCheck size={20} />
               <p>
-                基本チェックは端末内で実行します。「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、Crossref・CiNii Researchへ照会します。元のWordファイルは送信しません。
+                基本チェックは端末内で実行します。「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、資料の種類に応じてCrossref・CiNii Researchへ照会します。元のWordファイルは送信しません。
               </p>
             </div>
           </aside>
@@ -392,7 +392,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                     <div className="bibliography-links">
                       {finding.bibliography.links.source && (
                         <a href={finding.bibliography.links.source} target="_blank" rel="noreferrer">
-                          原典候補
+                          {finding.bibliography.status === "manual_source" ? "原典を開く" : "原典候補"}
                           <ArrowRight size={15} />
                         </a>
                       )}
@@ -829,7 +829,7 @@ export function App() {
             <ShieldCheck size={20} />
             <p><strong>データの処理について</strong><br />
               基本チェックは端末内で実行し、元のWordファイルは送信しません。
-              「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、Crossref・CiNii Researchへ照会します。本文は書誌照合のために送信しません。
+              「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、資料の種類に応じてCrossref・CiNii Researchへ照会します。本文は書誌照合のために送信しません。
             </p>
           </div>
 

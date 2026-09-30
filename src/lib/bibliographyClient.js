@@ -12,6 +12,35 @@ function bibliographyFinding(reference, result) {
 
   if (result.status === "verified") return null;
 
+  if (result.status === "manual_source") {
+    const isReport = result.referenceType === "report";
+    return {
+      id: crypto.randomUUID(),
+      category: "引用・参考文献",
+      severity: "info",
+      location,
+      title: isReport ? "Web上の報告書・PDFは原典で確認してください" : "Web資料は原典サイトで確認してください",
+      original: reference.text,
+      suggestion: "「原典を開く」から、資料名・作成者（団体）・公開年・URL・閲覧日を確認してください。閲覧年と公開年は区別して記載してください。",
+      reason: "企業サイトやWeb上の報告書は、論文データベースの照合対象と区別しています。リンクの接続や内容の一致を自動確認した結果ではありません。",
+      bibliography: result,
+    };
+  }
+
+  if (result.status === "lookup_incomplete") {
+    return {
+      id: crypto.randomUUID(),
+      category: "引用・参考文献",
+      severity: "info",
+      location,
+      title: "書誌データベースの照合を一部または全部実行できませんでした",
+      original: reference.text,
+      suggestion: "時間をおいて再実行するか、原典や検索リンクで確認してください。",
+      reason: `${(result.providerErrors ?? []).join("・")}への照会が完了していません。文献が見つからないという判定ではありません。`,
+      bibliography: result,
+    };
+  }
+
   if (result.status === "mismatch") {
     return {
       id: crypto.randomUUID(),
@@ -48,10 +77,10 @@ function bibliographyFinding(reference, result) {
       category: "引用・参考文献",
       severity: "info",
       location,
-      title: "書籍のため自動照合の対象外です",
+      title: "書籍の書誌情報を確定できませんでした",
       original: reference.text,
       suggestion:
-        "書籍は論文データベース（Crossref・CiNii）に載っていないことが多く、自動照合できません。Google Scholarや出版社ページで書誌情報を確認してください。",
+        "書籍はCiNiiの横断検索でも書誌情報を確定できない場合があります。出版社ページや図書館の蔵書検索で確認してください。",
       reason:
         "文献が存在しない、または記載が誤っているという判定ではありません。書籍と判定した文献は照合結果を警告として表示しません。",
       bibliography: result,
