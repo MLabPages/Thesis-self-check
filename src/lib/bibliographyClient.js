@@ -88,8 +88,14 @@ function apiUnavailableFinding(referenceCount) {
   };
 }
 
-export async function verifyBibliography(references, { onProgress } = {}) {
+export async function verifyBibliography(references, { onProgress, onFinding, signal } = {}) {
   const indexedFindings = [];
+  signal?.throwIfAborted();
+  function addFinding(index, finding) {
+    if (signal?.aborted) return;
+    indexedFindings.push({ index, finding });
+    onFinding?.(finding);
+  }
   const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(
     window.location.hostname,
   );
@@ -98,7 +104,7 @@ export async function verifyBibliography(references, { onProgress } = {}) {
     (!import.meta.env.DEV && !isLocalHost);
 
   if (!apiAvailable) {
-    return [
+    const findings = [
       {
         id: crypto.randomUUID(),
         category: "引用・参考文献",
@@ -112,6 +118,9 @@ export async function verifyBibliography(references, { onProgress } = {}) {
           "通常のローカル開発サーバーには書誌照合APIがないため、ここではまとめて案内しています。",
       },
     ];
+    findings.forEach((finding) => onFinding?.(finding));
+    onProgress?.(references.length, references.length);
+    return findings;
   }
 
   let cursor = 0;
@@ -119,21 +128,26 @@ export async function verifyBibliography(references, { onProgress } = {}) {
   let stopLookups = false;
 
   async function worker() {
-    while (!stopLookups) {
+    while (!stopLookups && !signal?.aborted) {
       const index = cursor;
       cursor += 1;
       if (index >= references.length) return;
       const reference = references[index];
+      const requestController = new AbortController();
+      const abortRequest = () => requestController.abort();
+      signal?.addEventListener("abort", abortRequest, { once: true });
+      const timeout = window.setTimeout(abortRequest, 30_000);
       try {
         const response = await fetch("/api/bibliography", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ reference: reference.text }),
+          signal: requestController.signal,
         });
         const contentType = response.headers.get("content-type") ?? "";
         if (response.status === 404 || !contentType.includes("json")) {
           if (!stopLookups) {
-            indexedFindings.push({ index: -1, finding: apiUnavailableFinding(references.length) });
+            addFinding(-1, apiUnavailableFinding(references.length));
           }
           stopLookups = true;
           return;
@@ -141,11 +155,10 @@ export async function verifyBibliography(references, { onProgress } = {}) {
         if (!response.ok) throw new Error("lookup unavailable");
         const result = await response.json();
         const finding = bibliographyFinding(reference, result);
-        if (finding) indexedFindings.push({ index, finding });
+        if (finding) addFinding(index, finding);
       } catch {
-        indexedFindings.push({
-          index,
-          finding: {
+        if (signal?.aborted) return;
+        addFinding(index, {
             id: crypto.randomUUID(),
             category: "引用・参考文献",
             severity: "info",
@@ -154,16 +167,18 @@ export async function verifyBibliography(references, { onProgress } = {}) {
             original: reference.text,
             suggestion: "公開環境で再実行するか、CiNii Researchで手動確認してください。",
             reason: "基本チェックは完了していますが、外部書誌照合APIを利用できませんでした。",
-          },
         });
       } finally {
+        window.clearTimeout(timeout);
+        signal?.removeEventListener("abort", abortRequest);
         completed += 1;
-        onProgress?.(completed, references.length);
+        if (!signal?.aborted) onProgress?.(completed, references.length);
       }
     }
   }
 
   await Promise.all(Array.from({ length: Math.min(2, references.length) }, () => worker()));
+  signal?.throwIfAborted();
   return indexedFindings
     .sort((left, right) => left.index - right.index)
     .map((item) => item.finding);

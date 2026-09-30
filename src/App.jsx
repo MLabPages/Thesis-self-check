@@ -38,44 +38,44 @@ const CHECKS = [
     id: "format",
     label: "書式・提出形式",
     short: "書式",
-    description: "体裁、章立て、ページ番号、図表番号、提出要件などを確認",
-    details: ["見出しや章番号の整合", "ページ番号・目次・表紙", "フォントや段落などの体裁"],
+    description: "Wordの見出しスタイルと見出しレベルの飛びを確認",
+    details: ["見出しスタイルの有無", "見出しレベルの飛び", "ページ番号・目次・表紙・フォント・提出要件は本人が確認"],
     icon: FileDoc,
   },
   {
     id: "writing",
     label: "誤字脱字・文章表現",
     short: "文章",
-    description: "誤字脱字、用語のゆれ、文法、表記の統一、冗長表現を確認",
-    details: ["誤字脱字・助詞の誤り", "用語・表記・時制の統一", "長すぎる文や曖昧な表現"],
+    description: "助詞・句読点の重複、表記ゆれ、文体の混在などの修正候補を確認",
+    details: ["助詞・句読点の重複、全角・半角の混在", "登録した用語の表記ゆれ、文体の混在", "構造が複雑な文の候補（誤字や文法全般の網羅的な検査ではありません）"],
     icon: TextAa,
   },
   {
     id: "logic",
     label: "構成・論理展開",
     short: "構成",
-    description: "構成の整合性、段落のつながり、論理の飛躍、重複を確認",
-    details: ["研究目的と結論の対応", "章・節・段落のつながり", "根拠不足や論理の飛躍"],
+    description: "研究目的や結論・考察に関する語の有無を確認",
+    details: ["研究目的に関する語の有無", "結論・考察に関する語の有無", "目的と結論の対応・論理の妥当性は本人が確認"],
     icon: TreeStructure,
   },
   {
     id: "figures",
     label: "図表",
     short: "図表",
-    description: "図表の番号・タイトル、本文との対応、参照漏れを確認",
-    details: ["番号・タイトル・出典", "本文からの参照", "図表の配置と説明"],
+    description: "図表番号の欠番候補とキャプション付近の出典表記を確認",
+    details: ["本文中の図表番号の欠番候補（章別番号は対象外）", "キャプション前後の出典・自作表記", "図表の配置・内容と本文の対応は本人が確認"],
     icon: ChartBar,
   },
   {
     id: "citations",
     label: "引用・参考文献",
     short: "引用",
-    description: "引用形式、出典、参考文献との整合性、文献の実在性を確認",
+    description: "参考文献一覧・発行年の有無と外部データベースの書誌情報を照合",
     details: [
-      "直接引用・間接引用の区別",
-      "本文と参考文献一覧の照合",
-      "DOI・論文名・著者・掲載誌の書誌情報照合",
-      "Web資料の閲覧日やURL",
+      "参考文献一覧の認識、発行年の記載候補",
+      "Crossref・CiNii Researchとの書誌情報照合（外部送信あり）",
+      "一致を確認できなくても、文献が存在しないとは判定しません",
+      "本文の引用と一覧の対応・引用形式・閲覧日は本人が確認",
     ],
     icon: Quotes,
   },
@@ -83,20 +83,19 @@ const CHECKS = [
     id: "ethics",
     label: "研究倫理・個人情報",
     short: "倫理",
-    description: "不適切な表現、剽窃の疑い、個人情報の記載の有無を確認",
-    details: ["個人情報と匿名化", "転載・剽窃への注意", "生成AI利用の申告確認"],
+    description: "メールアドレス・電話番号・学籍番号の候補を検出",
+    details: ["メールアドレス・電話番号・学籍番号の候補", "氏名・掲載同意・匿名化の適切さは本人が確認", "剽窃・転載許可・生成AI利用の申告は自動判定しません"],
     icon: ShieldCheck,
   },
   {
     id: "completion",
     label: "研究内容・妥当性",
     short: "妥当性",
-    description: "研究目的，調査設計，根拠，考察・示唆の妥当性を確認",
+    description: "特定の語や表現を手がかりに、研究内容を見直す確認事項を提示",
     details: [
-      "先行研究から調査目的へのつながり",
-      "調査設計・分析方法の具体性",
-      "個人的経験ではなく資料やデータで根拠を示しているか",
-      "結果から考察・示唆へ進めているか",
+      "先行研究・調査設計・考察に関する語の有無",
+      "箇条書きや個人的経験の表現に関する確認候補",
+      "研究内容の正しさ・新規性・妥当性は自動判定しません",
     ],
     icon: ClipboardText,
   },
@@ -181,19 +180,16 @@ function HighlightedText({ text, ranges }) {
   return parts;
 }
 
-function ResultGuidance({ findings }) {
+function ResultGuidance({ findings, pending, incomplete }) {
   const important = findings.filter((finding) => finding.severity === "important").length;
   const warnings = findings.filter((finding) => finding.severity === "warning").length;
   const infos = findings.filter((finding) => finding.severity === "info").length;
   const actionable = findings.filter((finding) => finding.severity !== "info");
-  const categoryCounts = actionable.reduce((counts, finding) => {
-    counts[finding.category] = (counts[finding.category] ?? 0) + 1;
-    return counts;
-  }, {});
-  const priorityCategories = Object.entries(categoryCounts)
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 3)
-    .map(([category]) => category);
+  const priorityCategories = [...new Set(
+    actionable
+      .sort((left, right) => (left.severity === "important" ? 0 : 1) - (right.severity === "important" ? 0 : 1))
+      .map((finding) => finding.category),
+  )].slice(0, 3);
 
   return (
     <section className="result-guidance">
@@ -203,10 +199,10 @@ function ResultGuidance({ findings }) {
         </span>
       </div>
       <div>
-        <h3>{findings.length === 0 ? "かなり整っています" : "一度に全部直さなくて大丈夫です"}</h3>
+        <h3>{pending ? "基本結果を表示しています" : incomplete ? "照合済みの範囲の結果を表示しています" : findings.length === 0 ? "選択したチェックでは指摘がありません" : "一度に全部直さなくて大丈夫です"}</h3>
         <p>
           {findings.length === 0
-            ? "この自動チェックでは大きな確認事項は出ていません。最後に本文と参考文献を自分の目で読み直してください。"
+            ? (pending ? "基本チェックでは指摘がありません。追加チェックの完了まで、結果は更新されます。" : "自動検出できる範囲での結果です。未選択の分類や、ページ番号・引用の対応・研究内容などは自分で確認してください。")
             : `まずは優先確認 ${important}件、次に修正候補 ${warnings}件を見ます。補足情報 ${infos}件は、余裕があるときに確認してください。`}
         </p>
         {priorityCategories.length > 0 && (
@@ -220,13 +216,16 @@ function ResultGuidance({ findings }) {
   );
 }
 
-function ResultsScreen({ documentData, findings, onBack }) {
+function ResultsScreen({ documentData, findings, checkedIds, bibliography, stageText, onStop, onBack }) {
   const [filter, setFilter] = useState("すべて");
+  const [onlyImportant, setOnlyImportant] = useState(false);
+  const pending = bibliography.status === "running" || Boolean(stageText);
+  const incomplete = ["cancelled", "failed"].includes(bibliography.status);
+  const severityOrder = { important: 0, warning: 1, info: 2 };
   const categories = ["すべて", ...new Set(findings.map((finding) => finding.category))];
-  const visible =
-    filter === "すべて"
-      ? findings
-      : findings.filter((finding) => finding.category === filter);
+  const visible = findings
+    .filter((finding) => (filter === "すべて" || finding.category === filter) && (!onlyImportant || finding.severity === "important"))
+    .sort((left, right) => (severityOrder[left.severity] ?? 2) - (severityOrder[right.severity] ?? 2));
   const important = findings.filter((finding) => finding.severity === "important").length;
 
   return (
@@ -243,6 +242,7 @@ function ResultsScreen({ documentData, findings, onBack }) {
             type="button"
             onClick={() => {
               setFilter("すべて");
+              setOnlyImportant(false);
               window.setTimeout(() => window.print(), 100);
             }}
           >
@@ -253,7 +253,7 @@ function ResultsScreen({ documentData, findings, onBack }) {
 
         <div className="results-heading">
           <div>
-            <span className="eyebrow">チェック完了</span>
+            <span className="eyebrow">{pending ? "基本チェック完了・追加チェック中" : incomplete ? "基本チェック完了・書誌照合は未完了" : "チェック完了"}</span>
             <h2>{documentData.fileName}</h2>
             <p>元のWordファイルは外部へ送信されていません。</p>
           </div>
@@ -290,7 +290,29 @@ function ResultsScreen({ documentData, findings, onBack }) {
           ))}
         </section>
 
-        <ResultGuidance findings={findings} />
+        <section className="checked-scope">
+          <strong>今回実行した分類：</strong>
+          {CHECKS.filter((item) => checkedIds.includes(item.id)).map((item) => item.label).join("・")}
+          <p>自動チェックは修正・確認の候補を提示します。指摘がないことは、提出要件の充足や研究内容の正しさを保証するものではありません。</p>
+        </section>
+
+        {bibliography.status !== "idle" && (
+          <section className="bibliography-progress" aria-live="polite">
+            <p>
+              {bibliography.status === "running"
+                ? `参考文献を照合しています… ${bibliography.done} / ${bibliography.total}件。基本結果は下で確認できます。`
+                : bibliography.status === "cancelled"
+                  ? "参考文献の照合を中止しました。未照合の文献が残っています。表示済みの結果は確認できます。"
+                  : bibliography.status === "failed"
+                    ? "参考文献の照合を完了できませんでした。基本結果と表示済みの照合結果を確認してください。"
+                    : "参考文献の照合処理が終了しました。一致・未確認・接続エラーの扱いは各確認事項をご覧ください。"}
+            </p>
+            {bibliography.status === "running" && <button type="button" onClick={onStop}>照合を中止</button>}
+          </section>
+        )}
+        {stageText && <p className="parsing-note" aria-live="polite">{stageText}</p>}
+
+        <ResultGuidance findings={findings} pending={pending} incomplete={incomplete} />
 
         <div className="results-layout">
           <aside className="filter-panel">
@@ -298,6 +320,10 @@ function ResultsScreen({ documentData, findings, onBack }) {
               <Funnel size={20} />
               表示する項目
             </div>
+            <label className="priority-filter">
+              <input type="checkbox" checked={onlyImportant} onChange={(event) => setOnlyImportant(event.target.checked)} />
+              優先確認だけ表示
+            </label>
             {categories.map((category) => (
               <button
                 className={filter === category ? "is-active" : ""}
@@ -316,9 +342,7 @@ function ResultsScreen({ documentData, findings, onBack }) {
             <div className="ai-note">
               <ShieldCheck size={20} />
               <p>
-                現在は端末内で実行できる基本チェックです。AI詳細チェックを接続する場合も、
-                メールアドレス・電話番号・学籍番号候補をマスクしてから抽出テキストを送信します。
-                氏名は自動検出できないため、送信前に本文へ残っていないか自分でも確認してください。
+                基本チェックは端末内で実行します。「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、Crossref・CiNii Researchへ照会します。元のWordファイルは送信しません。
               </p>
             </div>
           </aside>
@@ -332,7 +356,7 @@ function ResultsScreen({ documentData, findings, onBack }) {
             {visible.length === 0 ? (
               <div className="empty-findings">
                 <Check size={28} weight="bold" />
-                <strong>この分類で指摘はありません</strong>
+                <strong>{onlyImportant ? "この表示条件で優先確認はありません" : pending ? "現在、この分類の指摘はありません" : "この分類で指摘はありません"}</strong>
                 <p>最終確認は必ず学生本人と指導教員が行ってください。</p>
               </div>
             ) : (
@@ -340,6 +364,7 @@ function ResultsScreen({ documentData, findings, onBack }) {
                 <article className={`finding-card severity-${finding.severity}`} key={finding.id}>
                   <div className="finding-meta">
                     <span>{finding.category}</span>
+                    <span className="severity-label">{{ important: "優先確認", warning: "修正候補", info: "補足情報" }[finding.severity] ?? "補足情報"}</span>
                     <b>{finding.location}</b>
                   </div>
                   <h4>{finding.title}</h4>
@@ -407,6 +432,9 @@ function ResultsScreen({ documentData, findings, onBack }) {
 
 export function App() {
   const inputRef = useRef(null);
+  const reviewControllerRef = useRef(null);
+  const [checkedIds, setCheckedIds] = useState([]);
+  const [bibliography, setBibliography] = useState({ status: "idle", done: 0, total: 0 });
   const [file, setFile] = useState(null);
   const [selected, setSelected] = useState(() => CHECKS.map((item) => item.id));
   const [expanded, setExpanded] = useState([]);
@@ -431,6 +459,7 @@ export function App() {
     setStatus("parsing");
     setStageText("");
     setDocumentData(null);
+    setFile(null);
     setFindings([]);
 
     const isDocx =
@@ -499,24 +528,43 @@ export function App() {
       setError("Wordファイルの解析が完了していません。");
       return;
     }
-    setStatus("processing");
-    setStageText("基本チェックを実行しています…");
-    const localFindings = runLocalChecks(documentData, selected);
-    const combinedFindings = [...localFindings];
-    if (selected.includes("citations") && documentData.references.length > 0) {
-      const bibliographyFindings = await verifyBibliography(documentData.references, {
-        onProgress: (done, total) =>
-          setStageText(`参考文献を照合しています… ${done} / ${total}件`),
-      });
-      combinedFindings.push(...bibliographyFindings);
+    reviewControllerRef.current?.abort();
+    const controller = new AbortController();
+    reviewControllerRef.current = controller;
+    const isCurrent = () => reviewControllerRef.current === controller && !controller.signal.aborted;
+    const runIds = [...selected];
+    setCheckedIds(runIds);
+    setFindings(runLocalChecks(documentData, runIds));
+    const shouldVerify = runIds.includes("citations") && documentData.references.length > 0;
+    setBibliography({ status: shouldVerify ? "running" : "idle", done: 0, total: documentData.references.length });
+    setStageText("");
+    setStatus("complete");
+    window.scrollTo({ top: 0 });
+
+    if (shouldVerify) {
+      try {
+        await verifyBibliography(documentData.references, {
+          signal: controller.signal,
+          onFinding: (finding) => {
+            if (isCurrent()) setFindings((current) => [...current, finding]);
+          },
+          onProgress: (done, total) => {
+            if (isCurrent()) setBibliography({ status: "running", done, total });
+          },
+        });
+        if (isCurrent()) setBibliography((current) => ({ ...current, status: "done" }));
+      } catch {
+        if (isCurrent()) setBibliography((current) => ({ ...current, status: "failed" }));
+      }
     }
+    if (!isCurrent()) return;
     if (useAi && aiEnabled) {
       setStageText("AI詳細チェックを実行しています…（数十秒かかることがあります）");
       try {
-        const aiResult = await requestAiReview(documentData, selected);
-        combinedFindings.push(...(aiResult.findings ?? []));
+        const aiResult = await requestAiReview(documentData, runIds, controller.signal);
+        if (isCurrent()) setFindings((current) => [...current, ...(aiResult.findings ?? [])]);
       } catch (aiError) {
-        combinedFindings.push({
+        if (isCurrent()) setFindings((current) => [...current, {
           id: crypto.randomUUID(),
           category: "AI詳細チェック",
           severity: "info",
@@ -524,12 +572,19 @@ export function App() {
           title: "AI詳細チェックを実行できませんでした",
           original: aiError.message,
           suggestion: "基本チェックの結果を確認し、公開環境のAPI設定を管理者へ確認してください。",
-          reason: "Wordファイルや未マスクの個人情報は外部へ送信されていません。",
-        });
+          reason: "元のWordファイルは外部へ送信されていません。",
+        }]);
+      } finally {
+        if (isCurrent()) setStageText("");
       }
     }
-    setFindings(combinedFindings);
-    setStatus("complete");
+  }
+
+  function stopReview() {
+    reviewControllerRef.current?.abort();
+    reviewControllerRef.current = null;
+    setBibliography((current) => current.status === "running" ? { ...current, status: "cancelled" } : current);
+    setStageText("");
   }
 
   if (status === "complete") {
@@ -537,7 +592,11 @@ export function App() {
       <ResultsScreen
         documentData={documentData}
         findings={findings}
-        onBack={() => setStatus("ready")}
+        checkedIds={checkedIds}
+        bibliography={bibliography}
+        stageText={stageText}
+        onStop={stopReview}
+        onBack={() => { stopReview(); setStatus("ready"); }}
       />
     );
   }
@@ -550,7 +609,7 @@ export function App() {
         <section className="main-column">
           <div className="section-heading">
             <span>1.</span>
-            <h2>Wordファイルをアップロード</h2>
+            <h2>Wordファイルを選択</h2>
           </div>
 
           <input
@@ -667,7 +726,7 @@ export function App() {
           <div className="section-heading checks-heading">
             <span>2.</span>
             <h2>チェック項目を選択</h2>
-            <p>（すべてオンの状態でチェックされます）</p>
+            <p>（初期状態はすべて選択）</p>
           </div>
 
           <div className="master-row">
@@ -766,6 +825,14 @@ export function App() {
             </div>
           )}
 
+          <div className="external-disclosure">
+            <ShieldCheck size={20} />
+            <p><strong>データの処理について</strong><br />
+              基本チェックは端末内で実行し、元のWordファイルは送信しません。
+              「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信し、Crossref・CiNii Researchへ照会します。本文は書誌照合のために送信しません。
+            </p>
+          </div>
+
           <button
             className="primary-button run-button"
             type="button"
@@ -773,7 +840,7 @@ export function App() {
             onClick={startCheck}
           >
             <FileMagnifyingGlass size={29} />
-            サイト上で結果を確認
+            チェックを開始
             <ArrowRight size={25} />
           </button>
           <p className="duration-note">基本チェックは端末内で処理されます。</p>
@@ -823,7 +890,7 @@ export function App() {
               <h3>チェックの流れ（目安・基本チェック時）</h3>
               <div className="flow-steps">
                 {[
-                  ["1", "アップロード", "数秒"],
+                  ["1", "ファイル選択", "数秒"],
                   ["2", "自動チェック", "数秒〜1分"],
                   ["3", "結果の表示", "すぐ"],
                 ].map(([number, label, time], index) => (
