@@ -22,7 +22,7 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "undici": "^8.11.2",
-    "vite": "6.4.2"
+    "vite": "6.4.4"
   },
   "devDependencies": {
     "playwright": "^1.60.0"
