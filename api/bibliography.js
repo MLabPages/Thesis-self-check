@@ -146,6 +146,14 @@ function authorSimilarity(referenceAuthors, candidateAuthors) {
   return Math.max(similarity(referenceAuthors, candidateAuthors), partScore);
 }
 
+function authorsCorroborated(referenceAuthors, candidateAuthors) {
+  if (hasJapanese(referenceAuthors)) return authorSimilarity(referenceAuthors, candidateAuthors) === 1;
+  const words = (value) => String(value ?? "").toLowerCase().match(/\p{L}{2,}/gu) ?? [];
+  const provided = words(referenceAuthors).filter((word) => word !== "and");
+  const candidates = new Set(words(candidateAuthors));
+  return provided.length > 0 && provided.every((word) => candidates.has(word));
+}
+
 function quotedText(reference, opening, closing) {
   const start = reference.indexOf(opening);
   if (start < 0) return null;
@@ -228,7 +236,12 @@ export function extractReferenceFields(reference) {
   const referenceType = isWebSource
     ? (/\.pdf(?:[?#]|$)/i.test(sourceUrl) || /報告書|白書|調査報告|レポート/.test(reference) ? "report" : "web")
     : isBook ? "book" : "article";
-  return { year, dateState, doi, title, journal, authorArea, isJapaneseBook, isBook, referenceType, sourceUrl };
+  const afterQuotedTitle = quotedTitle && !journal
+    ? reference.slice(reference.indexOf(`「${quotedTitle}」`) + quotedTitle.length + 2)
+        .replace(/https?:\/\/\S+/g, "").replace(/^[.,、。\s]+|[.,、。\s]+$/g, "")
+    : "";
+  const institution = /大学|研究科|大学院/.test(afterQuotedTitle) ? afterQuotedTitle : null;
+  return { year, dateState, doi, title, journal, authorArea, isJapaneseBook, isBook, referenceType, sourceUrl, institution };
 }
 
 function scoreMatch(reference, fields, match) {
@@ -299,15 +312,21 @@ function titleMatches(provided, database) {
   return shorter.length >= 12 && longer.startsWith(shorter);
 }
 
-function compareFields(fields, match) {
+function subtitleOmitted(provided, database) {
+  const main = normalize(provided);
+  const parts = String(database ?? "").normalize("NFKC").split(/\s*:\s*|\s+[–—―-]\s+/);
+  return main.length >= 12 && parts.length > 1 && normalize(parts[0]) === main && Boolean(normalize(parts[1]));
+}
+
+function compareFields(fields, match, missingSubtitle) {
   const differences = [];
   const checkedFields = [];
 
   if (fields.title && match.title) {
     checkedFields.push("題名");
-    if (!titleMatches(fields.title, match.title)) {
+    if (missingSubtitle || !titleMatches(fields.title, match.title)) {
       differences.push({
-        field: "題名",
+        field: missingSubtitle ? "題名（副題）" : "題名",
         provided: fields.title,
         database: match.title,
       });
@@ -346,6 +365,12 @@ function compareFields(fields, match) {
       });
     }
   }
+  if (fields.institution && match.isRepositoryRecord && match.publisher) {
+    checkedFields.push("発行元");
+    if (normalize(fields.institution) !== normalize(match.publisher)) {
+      differences.push({ field: "発行元", provided: fields.institution, database: match.publisher });
+    }
+  }
   if (fields.doi && match.doi) {
     checkedFields.push("DOI");
     if (normalize(fields.doi) !== normalize(match.doi)) {
@@ -379,6 +404,10 @@ function crossrefMatch(item, reference, fields, confidenceOverride = null) {
         .join(", "),
     ),
     journal: decodeHtmlEntities(item["container-title"]?.[0] ?? ""),
+    volume: item.volume,
+    issue: item.issue,
+    pages: item.page ?? item["article-number"],
+    publisher: decodeHtmlEntities(item.publisher),
     year: yearCandidates[0] ?? null,
     yearCandidates,
     url: safeHttpUrl(item.URL),
@@ -403,6 +432,7 @@ function ciniiMatch(item, reference, fields) {
       "@value"
     ] ?? null;
   const publicationDate = item["prism:publicationDate"] ?? "";
+  const isRepositoryRecord = item["dc:type"] === "OtherWorks";
   const creators = Array.isArray(item["dc:creator"])
     ? item["dc:creator"]
     : item["dc:creator"]
@@ -418,13 +448,31 @@ function ciniiMatch(item, reference, fields) {
     title: decodeHtmlEntities(item.title ?? ""),
     authors: decodeHtmlEntities(orderedCreators.join(", ")),
     journal: decodeHtmlEntities(item["prism:publicationName"] ?? ""),
+    volume: item["prism:volume"],
+    issue: item["prism:number"],
+    pages: item["prism:pageRange"] ?? compact([item["prism:startingPage"], item["prism:endingPage"]]).join("–"),
+    publisher: decodeHtmlEntities(item["dc:publisher"]),
     year: String(publicationDate).match(/(?:19|20)\d{2}/)?.[0] ?? null,
     url: safeHttpUrl(item.link?.["@id"] ?? item["@id"]),
+    isRepositoryRecord,
+    repositoryUrl: isRepositoryRecord && safeHttpUrl(item["dc:source"]?.[0]?.["@id"]),
   };
   return {
     ...match,
     confidence: matchConfidence(reference, fields, match),
   };
+}
+
+async function repositoryMetadata(match) {
+  try {
+    const source = await fetchSource(match.repositoryUrl, { timeoutMs: 4_000 });
+    if (source.format !== "html") return null;
+    const metadata = extractHtmlMetadata(source.bytes, source.contentType, source.url);
+    if (normalize(metadata.citationTitle) !== normalize(match.title)) return null;
+    return { year: metadata.year, publisher: metadata.citationPublisher, originalUrl: source.url };
+  } catch {
+    return null;
+  }
 }
 
 async function searchCrossref(reference, fields, headers) {
@@ -441,13 +489,15 @@ async function searchCrossref(reference, fields, headers) {
 
   const matches = [];
   let successfulResponses = 0;
-  for (const query of queryVariants(fields.title || reference).slice(0, 2)) {
+  const title = fields.title || reference;
+  const detailedQuery = fields.title && [fields.title, fields.authorArea.trim(), fields.year, fields.journal].filter(Boolean).join(" ");
+  for (const query of compact([detailedQuery, ...queryVariants(title)]).slice(0, 2)) {
     const url = new URL("https://api.crossref.org/works");
     url.searchParams.set("query.bibliographic", query);
     url.searchParams.set("rows", "5");
     url.searchParams.set(
       "select",
-      "DOI,title,author,published,published-print,published-online,issued,container-title,URL",
+      "DOI,title,subtitle,author,published,published-print,published-online,issued,container-title,volume,issue,page,article-number,publisher,URL",
     );
     if (process.env.CROSSREF_MAILTO) {
       url.searchParams.set("mailto", process.env.CROSSREF_MAILTO);
@@ -467,13 +517,19 @@ async function searchCrossref(reference, fields, headers) {
 async function searchCinii(reference, fields) {
   const matches = [];
   let successfulResponses = 0;
-  const queries = queryVariants(fields.title || reference).slice(0, 3);
+  const title = fields.title || reference;
+  const creator = fields.title && !hasJapanese(title)
+    ? fields.authorArea.trim().match(/^[\p{L}][\p{L}'’-]+/u)?.[0] : null;
+  const queries = [
+    ...(creator ? [{ title, creator }] : []),
+    ...queryVariants(title).map((q) => ({ q })),
+  ].slice(0, 3);
+  // 大学リポジトリの修士論文などは論文検索の対象外となる場合がある。
+  const endpoint = fields.isBook || (hasJapanese(title) && !fields.journal) ? "all" : "articles";
   for (const [index, query] of queries.entries()) {
     if (index > 0) await wait(650);
-    // 書籍は論文検索に載らないため、書籍らしい文献は横断検索（all）を使う
-    const endpoint = fields.isBook ? "all" : "articles";
     const url = new URL(`https://cir.nii.ac.jp/opensearch/${endpoint}`);
-    url.searchParams.set("q", query);
+    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
     url.searchParams.set("count", "10");
     url.searchParams.set("start", "1");
     url.searchParams.set("lang", "ja");
@@ -487,7 +543,7 @@ async function searchCinii(reference, fields) {
     successfulResponses += 1;
     const batch = (data.items ?? []).map((item) => ciniiMatch(item, reference, fields));
     matches.push(...batch);
-    if (batch.some((match) => isReliableMatch(reference, fields, match))) break;
+    if (batch.some((match) => isReliableMatch(reference, fields, match) && (normalize(fields.title) === normalize(match.title) || subtitleOmitted(fields.title, match.title)))) break;
   }
   if (!successfulResponses) throw new Error("CiNii lookup unavailable");
   return matches;
@@ -555,14 +611,28 @@ export default async function handler(request, response) {
       ? [["Crossref", "CiNii Research"][index]] : []);
     return { matches, providerErrors };
   });
-  const bestMatch = matches.find((match) => isReliableMatch(reference, fields, match)) ?? null;
+  const reliableMatches = matches.filter((match) => isReliableMatch(reference, fields, match));
+  const best = reliableMatches[0];
+  const needsRepository = best?.repositoryUrl && (!best.year || !best.publisher)
+    && authorsCorroborated(fields.authorArea, best.authors)
+    && (normalize(fields.title) === normalize(best.title) || subtitleOmitted(fields.title, best.title));
+  const repository = needsRepository
+    ? await cachedLookup(`repository:${best.repositoryUrl}:${best.title}`, async () => {
+        const metadata = await repositoryMetadata(best);
+        return metadata ? { metadata } : { providerErrors: ["repository"] };
+      })
+    : null;
+  const bestMatch = repository?.metadata
+    ? { ...best, originalUrl: repository.metadata.originalUrl,
+        year: best.year ?? repository.metadata.year, publisher: best.publisher || repository.metadata.publisher }
+    : best;
   const manualLinks = {
     doi: fields.doi ? `https://doi.org/${encodeURI(fields.doi)}` : null,
     cinii: `https://cir.nii.ac.jp/all?q=${encodeURIComponent(fields.title || reference)}`,
     scholar: `https://scholar.google.com/scholar?q=${encodeURIComponent(fields.title || reference)}`,
   };
 
-  if (!bestMatch || bestMatch.confidence < 0.43) {
+  if (!bestMatch || bestMatch.confidence < 0.43 || !isReliableMatch(reference, fields, bestMatch)) {
     return response.status(200).json({
       status: providerErrors.length ? "lookup_incomplete" : fields.doi ? "doi_unconfirmed" : "not_found",
       providerErrors,
@@ -575,20 +645,30 @@ export default async function handler(request, response) {
     });
   }
 
-  const comparison = compareFields(fields, bestMatch);
   const doiConfirmed =
     fields.doi && bestMatch.doi && normalize(fields.doi) === normalize(bestMatch.doi);
+  const sameAuthorAndYear = fields.year && scoreMatch(reference, fields, bestMatch).yearScore === 1
+    && authorsCorroborated(fields.authorArea, bestMatch.authors);
+  const missingSubtitle = subtitleOmitted(fields.title, bestMatch.title);
+  const ambiguousSubtitle = missingSubtitle && reliableMatches.some((match) =>
+    subtitleOmitted(fields.title, match.title) && normalize(match.title) !== normalize(bestMatch.title));
+  const subtitleConfirmed = missingSubtitle && (doiConfirmed || (sameAuthorAndYear && !ambiguousSubtitle));
+  const doiAvailable = !fields.doi && Boolean(bestMatch.doi) && normalize(fields.title) === normalize(bestMatch.title)
+    && sameAuthorAndYear
+    && (!fields.journal || (bestMatch.journal && journalMatches(fields.journal, bestMatch.journal)));
+  const comparison = compareFields(fields, bestMatch, subtitleConfirmed);
   const titleDiffers = comparison.differences.some(
     (difference) => difference.field === "題名",
   );
   const links = {
-    source: bestMatch.url,
     ...manualLinks,
+    source: bestMatch.originalUrl ?? bestMatch.url,
+    doi: manualLinks.doi ?? (doiAvailable ? `https://doi.org/${encodeURI(bestMatch.doi)}` : null),
   };
 
   // 題名自体が一致しない候補は「同名に近い別文献」を掴んだ可能性が高いので、
   // 記載ミスとしての差異報告はせず、確認保留として返す（DOIが一致する場合を除く）
-  if (titleDiffers && !doiConfirmed) {
+  if ((titleDiffers && !doiConfirmed) || (missingSubtitle && !subtitleConfirmed)) {
     return response.status(200).json({
       status: "unconfirmed",
       bookLike: Boolean(fields.isBook),
@@ -602,6 +682,7 @@ export default async function handler(request, response) {
 
   return response.status(200).json({
     status: comparison.differences.length ? "mismatch" : "verified",
+    doiAvailable: Boolean(doiAvailable),
     bestMatch,
     differences: comparison.differences,
     checkedFields: comparison.checkedFields,

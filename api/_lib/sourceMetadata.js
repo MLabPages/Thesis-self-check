@@ -68,8 +68,12 @@ export function extractHtmlMetadata(bytes, contentType = "", sourceUrl = "") {
   if (dateElements.length === 1) explicitDates.push($(dateElements[0]).attr('datetime') ?? $(dateElements[0]).attr('content') ?? $(dateElements[0]).text());
   const dated = explicitDates.map((date) => ({ year: publicationYear(date), evidence: clean(date) })).filter((item) => item.year);
   const years = compact(dated.map((item) => item.year));
+  const citationTitles = compact(meta("citation_title"));
+  const citationPublishers = compact(meta("citation_publisher"));
   return { format: "html", titles, publishers, year: years.length === 1 ? years[0] : null,
     yearEvidence: years.length === 1 ? dated[0].evidence : null,
+    citationTitle: citationTitles.length === 1 ? citationTitles[0] : null,
+    citationPublisher: citationPublishers.length === 1 ? citationPublishers[0] : null,
     notes: years.length > 1 ? ["公開年の候補が複数あり、確定できませんでした。"] : [] };
 }
 

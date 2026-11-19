@@ -1,16 +1,19 @@
-function differenceText(differences) {
-  return differences
-    .map(
-      (difference) =>
-        `${difference.field}\n記載：${difference.provided || "なし"}\n照合先：${difference.database || "なし"}`,
-    )
-    .join("\n\n");
+function matchedDetails(match) {
+  const journal = [match.journal, match.volume ? `${match.volume}${match.issue ? `(${match.issue})` : ""}` : null, match.pages].filter(Boolean).join(", ");
+  return [
+    match.title,
+    !match.isRepositoryRecord && match.authors ? `著者　${match.authors}` : null,
+    match.year ? `発行年　${match.year}` : null,
+    journal ? `掲載誌　${journal}` : null,
+    !match.journal && match.publisher ? `発行元　${match.publisher}` : null,
+    match.doi ? `DOI　${match.doi}` : null,
+  ].filter(Boolean).join("\n");
 }
 
 function bibliographyFinding(reference, result) {
   const location = `参考文献 ${reference.id.replace("ref", "")}`;
 
-  if (result.status === "verified") return null;
+  if (result.status === "verified" && !result.doiAvailable) return null;
 
   if (result.status?.startsWith("source_")) {
     const sourceName = result.referenceType === "report" ? "報告書・PDF" : "Web資料";
@@ -81,17 +84,25 @@ function bibliographyFinding(reference, result) {
     };
   }
 
-  if (result.status === "mismatch") {
+  if (result.status === "mismatch" || result.status === "verified") {
+    const mismatch = result.status === "mismatch";
+    const sourceName = result.bestMatch.originalUrl ? "機関リポジトリ" : result.bestMatch.provider;
     return {
       id: crypto.randomUUID(),
       category: "引用・参考文献",
-      severity: "warning",
+      severity: mismatch ? "warning" : "info",
       location,
-      title: "書誌情報に差異があります",
+      title: mismatch ? "書誌情報に差異があります" : "照合先でDOIを確認できました",
       original: reference.text,
-      suggestion: differenceText(result.differences),
-      reason: `${result.bestMatch.provider}の候補と照合しました。記載順は判定せず、値が異なる項目だけを表示しています。データベース側が別の版・別の文献の可能性もあるため、「原典候補」リンクの内容も確認してください。`,
-      bibliography: result,
+      suggestionLabel: "照合先の書誌情報",
+      suggestion: matchedDetails(result.bestMatch),
+      reason: mismatch
+        ? `${sourceName}の書誌情報と照合しました。下の差異を確認し、提出先の引用形式に合わせて修正してください。`
+        : `${sourceName}の書誌情報でDOIを確認しました。提出先の引用形式に合わせて追記できます。`,
+      bibliography: {
+        ...result,
+        comparisons: result.differences.map(({ field, provided, database }) => ({ field, provided, source: database, state: "different" })),
+      },
     };
   }
 

@@ -33,7 +33,8 @@ try {
     return Response.json({ items: query.length <= 16 ? [article] : [] });
   };
   const result = await lookup(`伴・東山（2020）「${fullTitle}」『北海道大学農経論叢』, 74, 109-117.`, successfulFetch);
-  assert.equal(result.status, "verified", "題名内の括弧、著者の省略、副題付きメタデータを照合できる");
+  assert.equal(result.status, "mismatch", "題名内の括弧を読み取り、副題の省略を知らせる");
+  assert.deepEqual(result.differences.map(({ field }) => field), ["題名（副題）"]);
   assert.equal(result.bestMatch.url, article.link["@id"]);
   assert.ok(queries.includes(fullTitle), "入れ子の括弧で題名が途中で切れない");
   assert.ok(queries.some((query) => query.length <= 16), "短い題名の検索へフォールバックする");
@@ -42,8 +43,48 @@ try {
 
   const alwaysArticle = async (input) => new URL(input).hostname === "api.crossref.org"
     ? Response.json({ message: { items: [] } }) : Response.json({ items: [article] });
+  const confirmed = `伴・東山（2020）「${article.title}」『北海道大学農経論叢』, 74, 109-117.`;
+  assert.equal((await lookup(confirmed, alwaysArticle)).status, "verified", "副題まで記載済みなら差異なし");
   assert.equal((await lookup(`別人（2020）「${fullTitle}」『北海道大学農経論叢』, 74, 109-117.`, alwaysArticle)).status, "not_found", "題名が近くても著者が違えば確定しない");
   assert.equal((await lookup(`伴・東山（2019）「${fullTitle}」『北海道大学農経論叢』, 74, 109-117.`, alwaysArticle)).status, "not_found", "題名が近くても年が違えば確定しない");
+  const ambiguous = await lookup(`伴・東山（2020）「${fullTitle}」『北海道大学農経論叢』`, async (input) =>
+    new URL(input).hostname === "api.crossref.org" ? Response.json({ message: { items: [] } })
+      : Response.json({ items: [article, { ...article, title: `${fullTitle} : 別の事例調査` }] }));
+  assert.equal(ambiguous.status, "unconfirmed", "主題・著者・年が同じ別候補があれば副題を確定しない");
+
+  const thesisTitle = "サブスクリプション・サービスの継続理由の探索";
+  const thesis = await lookup(`武藤史子（2019）「${thesisTitle}」 慶應義塾大学 総合政策学部 / 政策・メディア研究科.`, async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.crossref.org") return Response.json({ message: { items: [] } });
+    assert.equal(url.pathname, "/opensearch/all");
+    return Response.json({ items: [{
+      title: `${thesisTitle} : 衣料品レンタルの利用者調査に基づく研究`,
+      "dc:creator": ["武藤, 史子", "谷口, 尚子"], "dc:type": "OtherWorks",
+      "dc:publisher": "慶應義塾大学大学院システムデザイン・マネジメント研究科", "prism:publicationDate": "2019",
+    }] });
+  });
+  assert.equal(thesis.status, "mismatch");
+  assert.deepEqual(thesis.differences.map(({ field }) => field), ["題名（副題）", "発行元"]);
+
+  const english = await lookup("Arkes, H. R., & Blumer, C. (1985). The Psychology of Sunk Cost. Organizational Behavior and Human Decision Processes, 35(1), 124-140.", async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.crossref.org") {
+      assert.match(url.searchParams.get("query.bibliographic"), /The Psychology of Sunk Cost.*Arkes.*1985/);
+      return Response.json({ message: { items: [] } });
+    }
+    assert.equal(url.searchParams.get("title"), "The Psychology of Sunk Cost");
+    assert.equal(url.searchParams.get("creator"), "Arkes");
+    return Response.json({ items: [{
+      title: "The psychology of sunk cost", "dc:creator": ["Hal R Arkes", "Catherine Blumer"],
+      "prism:publicationName": "Organizational Behavior and Human Decision Processes", "prism:publicationDate": "1985-02",
+      "prism:volume": "35", "prism:number": "1", "prism:startingPage": "124", "prism:endingPage": "140",
+      "dc:identifier": [{ "@type": "cir:DOI", "@value": "10.1016/0749-5978(85)90049-4" }],
+    }] });
+  });
+  assert.equal(english.status, "verified");
+  assert.equal(english.doiAvailable, true, "文献が一致した場合に取得できたDOIを案内する");
+  assert.equal(english.links.doi, "https://doi.org/10.1016/0749-5978(85)90049-4");
+  assert.equal(english.bestMatch.pages, "124–140");
 
   for (const [reference, url, type] of [
     ['萩むつみ豚HP（2026）「令和3年度6次産業アワード農林水産大臣官房局長賞を受賞」, (https://www.mutsumibuta.com/news/258/), (2026年1月14日確認)', "https://www.mutsumibuta.com/news/258/", "web"],
@@ -61,7 +102,7 @@ try {
   const unavailable = await lookup(`伴・東山（2020）「${fullTitle}」`, async () => Response.json({ error: "unavailable" }, { status: 503 }));
   assert.equal(unavailable.status, "lookup_incomplete", "サービス停止を文献未発見と区別する");
   assert.deepEqual(unavailable.providerErrors, ["Crossref", "CiNii Research"]);
-  const recoveryReference = `伴・東山（2020）「${fullTitle}」『北海道大学農経論叢』, 74, 109-117.`;
+  const recoveryReference = confirmed;
   await lookup(recoveryReference, async () => Response.json({}, { status: 503 }), "recovery");
   assert.equal((await lookup(recoveryReference, alwaysArticle, "recovery")).status, "verified", "接続障害をキャッシュせず、再実行で回復する");
   const balancedUrl = extractReferenceFields("企業HP（2020）「説明」 https://example.com/article_(details)");
@@ -73,6 +114,7 @@ try {
     return Response.json({ items: [] });
   });
   assert.equal(doi.status, "verified", "DOI付き論文をWeb資料に分類しない");
+  assert.equal(doi.doiAvailable, false, "記載済みDOIを追記候補にしない");
   console.log("Bibliography verification passed");
 } finally {
   globalThis.fetch = originalFetch;

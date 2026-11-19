@@ -381,18 +381,18 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                     </div>
                     <ArrowRight size={20} />
                     <div>
-                      <span>次にやること</span>
+                      <span>{finding.suggestionLabel ?? "次にやること"}</span>
                       <p>{finding.suggestion}</p>
                     </div>
                   </div>
-                  {finding.bibliography?.comparisons && (
-                    <div className="source-comparisons" aria-label="原典との書誌情報比較">
+                  {finding.bibliography?.comparisons?.length > 0 && (
+                    <div className="source-comparisons" aria-label="書誌情報の比較">
                       {finding.bibliography.comparisons.map((row) => (
                         <div className={`source-comparison state-${row.state}`} key={row.field}>
                           <div className="source-comparison-heading"><b>{row.field}</b><span>{{ match: "一致", different: "差異あり", unknown: "要確認" }[row.state]}</span></div>
                           <dl>
                             <div><dt>参考文献の記載</dt><dd>{row.provided}</dd></div>
-                            <div><dt>原典から取得</dt><dd>{row.source}{row.evidence && <small>根拠：{row.evidence}</small>}</dd></div>
+                            <div><dt>{finding.suggestionLabel ?? "原典から取得"}</dt><dd>{row.source}{row.evidence && <small>根拠：{row.evidence}</small>}</dd></div>
                           </dl>
                         </div>
                       ))}
@@ -404,9 +404,9 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                   </p>
                   {finding.bibliography?.links && (
                     <div className="bibliography-links">
-                      {finding.bibliography.links.source && (
+                      {finding.bibliography.links.source && finding.bibliography.links.source !== finding.bibliography.links.doi && (
                         <a href={finding.bibliography.links.source} target="_blank" rel="noreferrer">
-                          {finding.bibliography.status === "manual_source" || finding.bibliography.status?.startsWith("source_") ? "原典を開く" : "原典候補"}
+                          {finding.bibliography.bestMatch?.originalUrl || finding.bibliography.status === "manual_source" || finding.bibliography.status?.startsWith("source_") ? "原典を開く" : "原典候補"}
                           <ArrowRight size={15} />
                         </a>
                       )}
