@@ -94,6 +94,23 @@ function crossrefYear(item, key) {
   return item[key]?.["date-parts"]?.[0]?.[0] ?? null;
 }
 
+const pageRangePattern = /[a-z]?\d+(?:\s*[-–—−]\s*[a-z]?\d+)?/i;
+
+function normalizePages(value) {
+  const text = String(value ?? "").normalize("NFKC").trim();
+  return text.match(pageRangePattern)?.[0] === text && text
+    ? text.replace(/\s*[-–—−]\s*/g, "–") : null;
+}
+
+function pageRange(first, last) {
+  if (!first || !last) return null;
+  return normalizePages(String(first) === String(last) ? first : `${first}–${last}`);
+}
+
+function doiKey(value) {
+  return String(value ?? "").trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").toLowerCase();
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -220,7 +237,8 @@ export function extractReferenceFields(reference) {
   const englishJournal = englishParts[1]?.split(/,\s*\d/)[0]?.trim() ?? null;
   // 巻号・ページ表記がない英語文献は書籍とみなす（2番目の要素は出版社名なので掲載誌にしない）
   const referenceWithoutUrls = reference.replace(/https?:\/\/[^\s「」『』（）]+/gi, "");
-  const hasVolumeOrPages = /\d+\s*\(\d+\)|\d+\s*[–\-−]\s*\d+/.test(referenceWithoutUrls);
+  const hasVolumeOrPages = /\d+\s*\(\d+\)|\d+\s*[–\-−]\s*\d+/.test(referenceWithoutUrls)
+    || /,\s*\d+$/.test(englishParts[1] ?? "");
   // 巻号の代わりに記事番号を使う雑誌論文（例: 12, e123456）を書籍扱いしない
   const hasArticleNumber = /\b\d+\s*,\s*(?:e?\d{4,})\b/i.test(referenceWithoutUrls);
   const isEnglishBook =
@@ -241,7 +259,11 @@ export function extractReferenceFields(reference) {
         .replace(/https?:\/\/\S+/g, "").replace(/^[.,、。\s]+|[.,、。\s]+$/g, "")
     : "";
   const institution = /大学|研究科|大学院/.test(afterQuotedTitle) ? afterQuotedTitle : null;
-  return { year, dateState, doi, title, journal, authorArea, isJapaneseBook, isBook, referenceType, sourceUrl, institution };
+  const ending = afterYear.replace(/\s*(?:doi:\s*)?10\.\d{4,9}\/\S+\s*$/i, "").replace(/[.。\s]+$/, "");
+  const pages = normalizePages(ending.match(/(?:^|[\s,])([a-z]?\d+\s*[-–—−]\s*[a-z]?\d+)$/i)?.[1]
+    ?? ending.match(/(?:(?:,|』)\s*\d+(?:\s*\(\d+\))?\s*,|\bpp?\.)\s*(\d+)$/i)?.[1]);
+  const hasPageOrArticleCue = Boolean(pages || /(?:\bArticle\s+[\w-]+|\be\d{3,}|ページ|\bpp?\.)/i.test(ending));
+  return { year, dateState, doi, title, journal, authorArea, isJapaneseBook, isBook, referenceType, sourceUrl, institution, pages, hasPageOrArticleCue };
 }
 
 function scoreMatch(reference, fields, match) {
@@ -277,7 +299,7 @@ function matchConfidence(reference, fields, match) {
 function isReliableMatch(reference, fields, match) {
   const scores = scoreMatch(reference, fields, match);
   if (fields.doi) {
-    return normalize(fields.doi) === normalize(match.doi);
+    return doiKey(fields.doi) === doiKey(match.doi);
   }
   if (!fields.title || (scores.titleScore < 0.82 && !titleMatches(fields.title, match.title))) return false;
   if (fields.authorArea && match.authors && scores.authorScore < 0.48) {
@@ -393,6 +415,7 @@ function crossrefMatch(item, reference, fields, confidenceOverride = null) {
   ]);
   const match = {
     provider: "Crossref",
+    publicationType: item.type,
     doi: item.DOI ?? null,
     // Crossrefは副題（subtitle）を別フィールドで持つため、結合して比較する
     title: decodeHtmlEntities(
@@ -404,9 +427,11 @@ function crossrefMatch(item, reference, fields, confidenceOverride = null) {
         .join(", "),
     ),
     journal: decodeHtmlEntities(item["container-title"]?.[0] ?? ""),
+    authorNames: (item.author ?? []).map(({ family, given, name, suffix }) => ({ family, given, name, suffix })),
     volume: item.volume,
     issue: item.issue,
-    pages: item.page ?? item["article-number"],
+    pages: item["article-number"] && String(item.page) === String(item["article-number"]) ? null : normalizePages(item.page),
+    articleNumber: item["article-number"] ?? null,
     publisher: decodeHtmlEntities(item.publisher),
     year: yearCandidates[0] ?? null,
     yearCandidates,
@@ -444,13 +469,14 @@ function ciniiMatch(item, reference, fields) {
   ];
   const match = {
     provider: "CiNii Research",
+    publicationType: item["dc:type"] === "Article" ? "journal-article" : null,
     doi,
     title: decodeHtmlEntities(item.title ?? ""),
     authors: decodeHtmlEntities(orderedCreators.join(", ")),
     journal: decodeHtmlEntities(item["prism:publicationName"] ?? ""),
     volume: item["prism:volume"],
     issue: item["prism:number"],
-    pages: item["prism:pageRange"] ?? compact([item["prism:startingPage"], item["prism:endingPage"]]).join("–"),
+    pages: normalizePages(item["prism:pageRange"]) ?? pageRange(item["prism:startingPage"], item["prism:endingPage"]),
     publisher: decodeHtmlEntities(item["dc:publisher"]),
     year: String(publicationDate).match(/(?:19|20)\d{2}/)?.[0] ?? null,
     url: safeHttpUrl(item.link?.["@id"] ?? item["@id"]),
@@ -470,6 +496,19 @@ async function repositoryMetadata(match) {
     const metadata = extractHtmlMetadata(source.bytes, source.contentType, source.url);
     if (normalize(metadata.citationTitle) !== normalize(match.title)) return null;
     return { year: metadata.year, publisher: metadata.citationPublisher, originalUrl: source.url };
+  } catch {
+    return null;
+  }
+}
+
+async function publisherPages(doi) {
+  try {
+    const source = await fetchSource(`https://doi.org/${encodeURI(doi)}`, { timeoutMs: 4_000 });
+    if (source.format !== "html") return null;
+    const metadata = extractHtmlMetadata(source.bytes, source.contentType, source.url);
+    if (doiKey(metadata.citationDoi) !== doiKey(doi)) return null;
+    const pages = pageRange(metadata.citationFirstPage, metadata.citationLastPage);
+    return pages ? { pages, pagingProvider: "出版社の原典ページ", originalUrl: source.url } : null;
   } catch {
     return null;
   }
@@ -497,7 +536,7 @@ async function searchCrossref(reference, fields, headers) {
     url.searchParams.set("rows", "5");
     url.searchParams.set(
       "select",
-      "DOI,title,subtitle,author,published,published-print,published-online,issued,container-title,volume,issue,page,article-number,publisher,URL",
+      "DOI,type,title,subtitle,author,published,published-print,published-online,issued,container-title,volume,issue,page,article-number,publisher,URL",
     );
     if (process.env.CROSSREF_MAILTO) {
       url.searchParams.set("mailto", process.env.CROSSREF_MAILTO);
@@ -521,6 +560,7 @@ async function searchCinii(reference, fields) {
   const creator = fields.title && !hasJapanese(title)
     ? fields.authorArea.trim().match(/^[\p{L}][\p{L}'’-]+/u)?.[0] : null;
   const queries = [
+    ...(fields.doi ? [{ doi: fields.doi }] : []),
     ...(creator ? [{ title, creator }] : []),
     ...queryVariants(title).map((q) => ({ q })),
   ].slice(0, 3);
@@ -543,7 +583,7 @@ async function searchCinii(reference, fields) {
     successfulResponses += 1;
     const batch = (data.items ?? []).map((item) => ciniiMatch(item, reference, fields));
     matches.push(...batch);
-    if (batch.some((match) => isReliableMatch(reference, fields, match) && (normalize(fields.title) === normalize(match.title) || subtitleOmitted(fields.title, match.title)))) break;
+    if (batch.some((match) => isReliableMatch(reference, fields, match) && (fields.doi || normalize(fields.title) === normalize(match.title) || subtitleOmitted(fields.title, match.title)))) break;
   }
   if (!successfulResponses) throw new Error("CiNii lookup unavailable");
   return matches;
@@ -622,7 +662,7 @@ export default async function handler(request, response) {
         return metadata ? { metadata } : { providerErrors: ["repository"] };
       })
     : null;
-  const bestMatch = repository?.metadata
+  let bestMatch = repository?.metadata
     ? { ...best, originalUrl: repository.metadata.originalUrl,
         year: best.year ?? repository.metadata.year, publisher: best.publisher || repository.metadata.publisher }
     : best;
@@ -646,7 +686,7 @@ export default async function handler(request, response) {
   }
 
   const doiConfirmed =
-    fields.doi && bestMatch.doi && normalize(fields.doi) === normalize(bestMatch.doi);
+    fields.doi && bestMatch.doi && doiKey(fields.doi) === doiKey(bestMatch.doi);
   const sameAuthorAndYear = fields.year && scoreMatch(reference, fields, bestMatch).yearScore === 1
     && authorsCorroborated(fields.authorArea, bestMatch.authors);
   const missingSubtitle = subtitleOmitted(fields.title, bestMatch.title);
@@ -656,6 +696,26 @@ export default async function handler(request, response) {
   const doiAvailable = !fields.doi && Boolean(bestMatch.doi) && normalize(fields.title) === normalize(bestMatch.title)
     && sameAuthorAndYear
     && (!fields.journal || (bestMatch.journal && journalMatches(fields.journal, bestMatch.journal)));
+  if (bestMatch.journal && (doiConfirmed || doiAvailable)) {
+    const related = matches.filter((match) => match !== best && doiKey(match.doi) === doiKey(bestMatch.doi));
+    const pagination = related.find((match) => match.articleNumber || match.pages);
+    const names = related.find((match) => match.authorNames?.length)?.authorNames;
+    if (!bestMatch.pages && !bestMatch.articleNumber && pagination) {
+      bestMatch = { ...bestMatch, pages: pagination.pages, articleNumber: pagination.articleNumber, pagingProvider: pagination.provider };
+    }
+    if (!bestMatch.authorNames?.length && names) bestMatch = { ...bestMatch, authorNames: names };
+    if (!bestMatch.pages && !bestMatch.articleNumber && !fields.hasPageOrArticleCue && /^10\.\d{4,9}\/\S+$/.test(bestMatch.doi)) {
+      const doi = bestMatch.doi;
+      const { metadata } = await cachedLookup(`pages:${doiKey(doi)}`, async () => {
+        const metadata = await publisherPages(doi);
+        return metadata ? { metadata } : { providerErrors: ["publisher"] };
+      });
+      if (metadata) bestMatch = { ...bestMatch, ...metadata };
+    }
+  }
+  const pagesAvailable = Boolean(bestMatch.journal && bestMatch.pages && !fields.hasPageOrArticleCue
+    && (doiConfirmed || (sameAuthorAndYear && normalize(fields.title) === normalize(bestMatch.title)
+      && fields.journal && journalMatches(fields.journal, bestMatch.journal))));
   const comparison = compareFields(fields, bestMatch, subtitleConfirmed);
   const titleDiffers = comparison.differences.some(
     (difference) => difference.field === "題名",
@@ -683,6 +743,9 @@ export default async function handler(request, response) {
   return response.status(200).json({
     status: comparison.differences.length ? "mismatch" : "verified",
     doiAvailable: Boolean(doiAvailable),
+    pagesAvailable,
+    citationConfirmed: Boolean(doiConfirmed || doiAvailable || (sameAuthorAndYear
+      && normalize(fields.title) === normalize(bestMatch.title) && fields.journal && journalMatches(fields.journal, bestMatch.journal))),
     bestMatch,
     differences: comparison.differences,
     checkedFields: comparison.checkedFields,

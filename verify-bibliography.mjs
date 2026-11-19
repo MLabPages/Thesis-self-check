@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { extractReferenceFields } from "./api/bibliography.js";
+import { apaJournalReference } from "./src/lib/apaReference.js";
 
 // CiNii OpenSearchの実データから必要な書誌情報だけ保存（2026-09-30取得）。
 const article = JSON.parse(await readFile(new URL("./tests/fixtures/cinii-value-creation.json", import.meta.url)));
@@ -85,6 +86,38 @@ try {
   assert.equal(english.doiAvailable, true, "文献が一致した場合に取得できたDOIを案内する");
   assert.equal(english.links.doi, "https://doi.org/10.1016/0749-5978(85)90049-4");
   assert.equal(english.bestMatch.pages, "124–140");
+  assert.equal(english.pagesAvailable, false, "記載済みのページは追記候補にしない");
+
+  const arkesDoi = "10.1016/0749-5978(85)90049-4";
+  const arkesTitle = "The psychology of sunk cost";
+  const arkesJournal = "Organizational Behavior and Human Decision Processes";
+  const arkesRecord = {
+    DOI: arkesDoi, type: "journal-article", title: [arkesTitle], "container-title": [arkesJournal], volume: "35", issue: "1",
+    author: [{ family: "Arkes", given: "Hal R." }, { family: "Blumer", given: "Catherine" }], issued: { "date-parts": [[1985]] },
+  };
+  const noPages = `Arkes, H. R., & Blumer, C. (1985). ${arkesTitle}. ${arkesJournal}, 35(1). https://doi.org/${arkesDoi}`;
+  const supplemented = await lookup(noPages, async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.crossref.org") return Response.json({ message: arkesRecord });
+    assert.equal(url.searchParams.get("doi"), arkesDoi);
+    return Response.json({ items: [{
+      title: arkesTitle, "prism:startingPage": "124", "prism:endingPage": "140",
+      "dc:identifier": [{ "@type": "cir:DOI", "@value": arkesDoi }],
+    }] });
+  });
+  assert.equal(supplemented.status, "verified");
+  assert.equal(supplemented.pagesAvailable, true, "同一DOIを持つ別の照合先から掲載ページを取得する");
+  assert.equal(supplemented.bestMatch.pagingProvider, "CiNii Research");
+  assert.equal(apaJournalReference(supplemented.bestMatch).text,
+    `Arkes, H. R., & Blumer, C. (1985). ${arkesTitle}. ${arkesJournal}, 35(1), 124–140. https://doi.org/${arkesDoi}`);
+
+  const electronic = await lookup(noPages, async (input) => new URL(input).hostname === "api.crossref.org"
+    ? Response.json({ message: { ...arkesRecord, page: "e23456", "article-number": "e23456" } })
+    : Response.json({ items: [] }));
+  assert.equal(electronic.pagesAvailable, false, "記事番号は掲載ページ数として表示しない");
+  assert.equal(apaJournalReference(electronic.bestMatch).tail, "(1), Article e23456.");
+  assert.equal(apaJournalReference({ ...electronic.bestMatch, articleNumber: null }).paginationUnknown, true);
+  assert.equal(apaJournalReference({ ...electronic.bestMatch, publicationType: "book-chapter" }), null);
 
   for (const [reference, url, type] of [
     ['萩むつみ豚HP（2026）「令和3年度6次産業アワード農林水産大臣官房局長賞を受賞」, (https://www.mutsumibuta.com/news/258/), (2026年1月14日確認)', "https://www.mutsumibuta.com/news/258/", "web"],

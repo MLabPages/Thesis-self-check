@@ -540,6 +540,11 @@ footer {
 .source-comparison dt { color: var(--muted); font-size: 11px; }
 .source-comparison dd { margin: 3px 0 0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .source-comparison small { display: block; color: var(--muted); }
+.apa-reference { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; }
+.apa-reference b, .apa-reference p { font-size: 13px; }
+.apa-reference p { margin: 6px 0 0; line-height: 1.7; overflow-wrap: anywhere; }
+.apa-reference a { color: var(--navy); }
+.apa-reference small { color: var(--muted); font-size: 11px; }
 @media (max-width: 620px) { .source-comparison dl { grid-template-columns: 1fr; gap: 8px; } }
 .empty-findings {
   min-height: 230px;

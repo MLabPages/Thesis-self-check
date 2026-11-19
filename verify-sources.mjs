@@ -21,6 +21,9 @@ assert.equal(citations('企業HP（n.d.）「事業紹介」').length, 0, "n.d.�
 assert.ok(citations('企業HP「事業紹介」 https://example.com/2020 (2026年確認)').some((item) => item.title.includes("発行年")), "閲覧年だけの記載を発行年ありにしない");
 
 const html = (text) => extractHtmlMetadata(Buffer.from(text), "text/html; charset=utf-8", "https://example.com/about");
+const pagination = html('<meta name="citation_doi" content="10.1234/example"><meta name="citation_firstpage" content="124"><meta name="citation_lastpage" content="140">');
+assert.deepEqual([pagination.citationDoi, pagination.citationFirstPage, pagination.citationLastPage], ["10.1234/example", "124", "140"]);
+assert.equal(html('<meta name="citation_firstpage" content="1"><meta name="citation_firstpage" content="2">').citationFirstPage, null);
 const homepage = html('<title>事業紹介｜尾鷲物産株式会社</title><meta property="og:site_name" content="尾鷲物産株式会社"><main><h1>事業紹介</h1><p>2016年創業</p></main><footer>Copyright 2026</footer><meta property="article:modified_time" content="2025-01-01">');
 assert.equal(homepage.year, null, "創業年・著作権年・更新年を公開年にしない");
 const fields = extractReferenceFields('尾鷲物産株式会社HP（n.d.）「事業紹介」 https://example.com/about (2026年確認)');

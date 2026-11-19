@@ -1,3 +1,5 @@
+import { apaJournalReference } from "./apaReference.js";
+
 function matchedDetails(match) {
   const journal = [match.journal, match.volume ? `${match.volume}${match.issue ? `(${match.issue})` : ""}` : null, match.pages].filter(Boolean).join(", ");
   return [
@@ -5,6 +7,7 @@ function matchedDetails(match) {
     !match.isRepositoryRecord && match.authors ? `著者　${match.authors}` : null,
     match.year ? `発行年　${match.year}` : null,
     journal ? `掲載誌　${journal}` : null,
+    match.articleNumber ? `記事番号　${match.articleNumber}` : null,
     !match.journal && match.publisher ? `発行元　${match.publisher}` : null,
     match.doi ? `DOI　${match.doi}` : null,
   ].filter(Boolean).join("\n");
@@ -12,8 +15,6 @@ function matchedDetails(match) {
 
 function bibliographyFinding(reference, result) {
   const location = `参考文献 ${reference.id.replace("ref", "")}`;
-
-  if (result.status === "verified" && !result.doiAvailable) return null;
 
   if (result.status?.startsWith("source_")) {
     const sourceName = result.referenceType === "report" ? "報告書・PDF" : "Web資料";
@@ -86,23 +87,26 @@ function bibliographyFinding(reference, result) {
 
   if (result.status === "mismatch" || result.status === "verified") {
     const mismatch = result.status === "mismatch";
-    const sourceName = result.bestMatch.originalUrl ? "機関リポジトリ" : result.bestMatch.provider;
+    const apa = result.citationConfirmed ? apaJournalReference(result.bestMatch) : null;
+    if (!mismatch && !result.doiAvailable && !result.pagesAvailable && !apa) return null;
+    const sourceName = result.bestMatch.isRepositoryRecord && result.bestMatch.originalUrl ? "機関リポジトリ" : result.bestMatch.provider;
+    const pagingSource = result.bestMatch.pagingProvider ?? sourceName;
+    const comparisons = result.differences.map(({ field, provided, database }) => ({ field, provided, source: database, state: "different" }));
+    if (result.pagesAvailable) {
+      comparisons.push({ field: "掲載ページ", provided: "記載なし", source: result.bestMatch.pages, state: "supplement", evidence: pagingSource });
+    }
     return {
       id: crypto.randomUUID(),
       category: "引用・参考文献",
       severity: mismatch ? "warning" : "info",
       location,
-      title: mismatch ? "書誌情報に差異があります" : "照合先でDOIを確認できました",
+      title: mismatch ? "書誌情報に差異があります" : result.pagesAvailable ? "照合先で掲載ページを確認できました"
+        : result.doiAvailable ? "照合先でDOIを確認できました" : "書誌情報を確認しました",
       original: reference.text,
       suggestionLabel: "照合先の書誌情報",
       suggestion: matchedDetails(result.bestMatch),
-      reason: mismatch
-        ? `${sourceName}の書誌情報と照合しました。下の差異を確認し、提出先の引用形式に合わせて修正してください。`
-        : `${sourceName}の書誌情報でDOIを確認しました。提出先の引用形式に合わせて追記できます。`,
-      bibliography: {
-        ...result,
-        comparisons: result.differences.map(({ field, provided, database }) => ({ field, provided, source: database, state: "different" })),
-      },
+      reason: `${sourceName}の書誌情報と照合しました。${mismatch ? "差異を確認し、提出先の引用形式に合わせて修正してください。" : ""}`,
+      bibliography: { ...result, comparisons, apa },
     };
   }
 

@@ -140,13 +140,13 @@ function SiteHeader() {
   );
 }
 
-function CopyButton({ text }) {
+function CopyButton({ text, label = "原文をコピー", title = "コピーした文をWordの検索（Ctrl+F）に貼り付けると該当箇所へ移動できます" }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       className="copy-button"
       type="button"
-      title="コピーした文をWordの検索（Ctrl+F）に貼り付けると該当箇所へ移動できます"
+      title={title}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);
@@ -158,7 +158,7 @@ function CopyButton({ text }) {
       }}
     >
       <ClipboardText size={14} />
-      {copied ? "コピーしました" : "原文をコピー"}
+      {copied ? "コピーしました" : label}
     </button>
   );
 }
@@ -179,6 +179,19 @@ function HighlightedText({ text, ranges }) {
   }
   parts.push(text.slice(cursor));
   return parts;
+}
+
+function ApaReference({ apa }) {
+  return (
+    <section className="apa-reference" aria-label="APA第7版の記載例">
+      <div className="comparison-label">
+        <b>APA第7版の記載例</b>
+        <CopyButton text={apa.text} label="APA形式をコピー" title="引用例をテキストとしてコピーします" />
+      </div>
+      <p>{apa.prefix}<em>{apa.journal}</em>{apa.tail}{apa.doi && <> <a href={apa.doi} target="_blank" rel="noreferrer">{apa.doi}</a></>}</p>
+      {apa.paginationUnknown && <small>掲載ページ・記事番号は取得できませんでした。</small>}
+    </section>
+  );
 }
 
 function ResultGuidance({ findings, pending, incomplete }) {
@@ -343,7 +356,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
             <div className="ai-note">
               <ShieldCheck size={20} />
               <p>
-                基本チェックは端末内で実行します。「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信します。論文・書籍はCrossref・CiNii Researchへ照会し、URL付きWeb資料・PDFは記載URLへ接続して原典の情報を取得します。原典サイトへ参考文献の記載全体は送信しません。元のWordファイルは送信しません。
+                基本チェックは端末内で実行します。「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信します。論文・書籍はCrossref・CiNii Researchへ照会します。確認済みのDOIやWeb資料・PDFの記載URLから原典へ接続する場合があります。原典サイトへ参考文献の記載全体は送信しません。元のWordファイルは送信しません。
               </p>
             </div>
           </aside>
@@ -389,7 +402,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                     <div className="source-comparisons" aria-label="書誌情報の比較">
                       {finding.bibliography.comparisons.map((row) => (
                         <div className={`source-comparison state-${row.state}`} key={row.field}>
-                          <div className="source-comparison-heading"><b>{row.field}</b><span>{{ match: "一致", different: "差異あり", unknown: "要確認" }[row.state]}</span></div>
+                          <div className="source-comparison-heading"><b>{row.field}</b><span>{{ match: "一致", different: "差異あり", unknown: "要確認", supplement: "追記候補" }[row.state]}</span></div>
                           <dl>
                             <div><dt>参考文献の記載</dt><dd>{row.provided}</dd></div>
                             <div><dt>{finding.suggestionLabel ?? "原典から取得"}</dt><dd>{row.source}{row.evidence && <small>根拠：{row.evidence}</small>}</dd></div>
@@ -398,6 +411,7 @@ function ResultsScreen({ documentData, findings, checkedIds, bibliography, stage
                       ))}
                     </div>
                   )}
+                  {finding.bibliography?.apa && <ApaReference apa={finding.bibliography.apa} />}
                   <p className="finding-reason">
                     <Info size={16} />
                     {finding.reason}
@@ -843,7 +857,7 @@ export function App() {
             <ShieldCheck size={20} />
             <p><strong>データの処理について</strong><br />
               基本チェックは端末内で実行し、元のWordファイルは送信しません。
-              「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信します。論文・書籍はCrossref・CiNii Researchへ照会し、URL付きWeb資料・PDFは記載URLへ接続して原典の情報を取得します。原典サイトへ参考文献の記載全体は送信しません。本文は書誌照合のために送信しません。
+              「引用・参考文献」を選ぶと、参考文献の記載を本サービスのサーバーへ送信します。論文・書籍はCrossref・CiNii Researchへ照会します。確認済みのDOIやWeb資料・PDFの記載URLから原典へ接続する場合があります。原典サイトへ参考文献の記載全体は送信しません。本文は書誌照合のために送信しません。
             </p>
           </div>
 
