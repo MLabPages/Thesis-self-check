@@ -3,6 +3,14 @@
 卒業論文の `.docx` をブラウザ内で解析し、提出前の確認結果をサイト上に表示する
 React/Viteアプリです。
 
+## ライセンス
+
+このプロジェクトの独自コードとドキュメントには [MIT License](LICENSE) が適用されます。Copyright (c) 2026 H. Makino
+
+依存パッケージには各配布元のライセンスが適用されます。主な依存関係は React と Phosphor Icons が MIT、JSZip が MIT または GPL-3.0-or-later、PDF.js が Apache-2.0 です。依存関係を同梱して配布する場合は、各パッケージに付属するライセンスと表示を保持してください。
+
+テストと記載例に含まれる外部資料の書誌情報は、プロジェクトの MIT の対象外です。`tests/fixtures/cinii-value-creation.json` の出典は [CiNii Research の書誌レコード](https://cir.nii.ac.jp/crid/1050011716214901120) です。サービス利用時は [CiNii Research の利用条件](https://support.nii.ac.jp/ja/cinii/terms) を参照してください。
+
 ## 現在動く機能
 
 - Word本文・見出し・図・表・脚注・参考文献のブラウザ内抽出（目次などのコンテンツコントロール内も対象）
